@@ -1480,15 +1480,51 @@ function applySemanticIntentToLocalIntent(localIntent, semanticIntent) {
   const pieza = normalizeText(semanticIntent.pieza_normalizada);
   const productMap = SEMANTIC_PRODUCT_MAP[pieza] || null;
 
-  const semanticExclusions = normalizeSemanticList(semanticIntent.exclusiones);
-  const currentExclusions = normalizeSemanticList(localIntent.excluded_tokens);
+  const legacySemanticExclusions = normalizeSemanticList(semanticIntent.exclusiones);
+  const semanticVehicleExclusions = normalizeSemanticList(
+    semanticIntent.exclusiones_vehiculo
+  );
+  const semanticProductBrandExclusions = normalizeSemanticList(
+    semanticIntent.exclusiones_marca_producto
+  );
 
-  const excludedTokens = unique([...currentExclusions, ...semanticExclusions]);
+  const currentVehicleExclusions = normalizeSemanticList(
+    localIntent.excluded_vehicle_tokens || localIntent.excluded_tokens || []
+  );
+
+  const currentProductBrandExclusions = normalizeSemanticList(
+    localIntent.excluded_product_brand_tokens || []
+  );
+
+  const excludedVehicleTokens = unique([
+    ...currentVehicleExclusions,
+    ...semanticVehicleExclusions,
+  ]);
+
+  const excludedProductBrandTokens = unique([
+    ...currentProductBrandExclusions,
+    ...semanticProductBrandExclusions,
+  ]);
+
+  /**
+   * Compatibilidad legacy:
+   * Si la IA vieja todavía manda "exclusiones" plano, las usamos como vehículo
+   * solo cuando no se pudo clasificar nada nuevo.
+   */
+  const fallbackVehicleTokens =
+    excludedVehicleTokens.length || excludedProductBrandTokens.length
+      ? excludedVehicleTokens
+      : legacySemanticExclusions;
 
   const next = {
     ...localIntent,
-    excluded_tokens: excludedTokens,
-    has_negation: excludedTokens.length > 0 || Boolean(localIntent.has_negation),
+    excluded_tokens: fallbackVehicleTokens,
+    excluded_vehicle_tokens: fallbackVehicleTokens,
+    excluded_product_brand_tokens: excludedProductBrandTokens,
+    has_negation:
+      fallbackVehicleTokens.length > 0 ||
+      excludedProductBrandTokens.length > 0 ||
+      Boolean(localIntent.has_negation),
     normalizador_ia: semanticIntent,
     normalizador_ia_aplicado: true,
   };
@@ -1552,9 +1588,50 @@ function applySemanticIntentToLocalIntent(localIntent, semanticIntent) {
   return next;
 }
 
+function classifyLocalExclusionsByScope(question, exclusions = []) {
+  const text = normalizeText(question);
+  const cleanExclusions = normalizeSemanticList(exclusions);
+
+  const productBrandLanguage =
+    /\bMARCA\s+DIFERENTE\b/.test(text) ||
+    /\bOTRA\s+MARCA\b/.test(text) ||
+    /\bDISTINT[AO]\s+A\b/.test(text) ||
+    /\bFABRICAD[AO]\b/.test(text) ||
+    /\bPRODUCID[AO]\b/.test(text) ||
+    /\bPROVENGA\b/.test(text) ||
+    /\bORIGINAL\b/.test(text) ||
+    /\bOEM\b/.test(text);
+
+  const vehicleApplicationLanguage =
+    /\bPARA\b/.test(text) ||
+    /\bCOMPATIBLE\b/.test(text) ||
+    /\bLE\s+QUEDE\b/.test(text) ||
+    /\bLE\s+SIRVA\b/.test(text) ||
+    /\bAPLIQUE\b/.test(text) ||
+    /\bAPLICACION\b/.test(text) ||
+    /\bAPLICACIÓN\b/.test(text) ||
+    /\bNOT\s+FOR\b/.test(text);
+
+  if (productBrandLanguage && !vehicleApplicationLanguage) {
+    return {
+      vehicle: [],
+      productBrand: cleanExclusions,
+    };
+  }
+
+  return {
+    vehicle: cleanExclusions,
+    productBrand: [],
+  };
+}
+
 async function buildIntent(question) {
   const normalizedQuestion = normalizeSearchQuery(question);
   const excludedTokens = extractExcludedTerms(question);
+  const localExclusionScope = classifyLocalExclusionsByScope(
+    question,
+    excludedTokens
+  );
   const commercialPreferences = detectCommercialPreferences(question);
   const conditionWarnings = detectConditionWarnings(question);
   const motorCandidates = extractMotorCandidates(question);
@@ -1604,8 +1681,12 @@ async function buildIntent(question) {
     motor: extractMotor(question),
     numero_parte_tokens: extractPartNumbers(question),
     tokens,
-    excluded_tokens: excludedTokens,
-    has_negation: excludedTokens.length > 0,
+    excluded_tokens: localExclusionScope.vehicle,
+    excluded_vehicle_tokens: localExclusionScope.vehicle,
+    excluded_product_brand_tokens: localExclusionScope.productBrand,
+    has_negation:
+      localExclusionScope.vehicle.length > 0 ||
+      localExclusionScope.productBrand.length > 0,
     sinonimos_detectados: synonyms,
     expansiones_detectadas: expansionTokens,
     sintomas_detectados: symptomRules.map((rule) => ({
@@ -1748,11 +1829,14 @@ function buildCandidateWhere(intent) {
     conditions.push(`(${vehicleConditions.join(" AND ")})`);
   }
 
-  /**
-   * Exclusiones tipo "no Nissan".
-   */
-  if (Array.isArray(intent.excluded_tokens) && intent.excluded_tokens.length) {
-    for (const excluded of intent.excluded_tokens) {
+  const excludedVehicleTokens = Array.isArray(intent.excluded_vehicle_tokens)
+    ? intent.excluded_vehicle_tokens
+    : Array.isArray(intent.excluded_tokens)
+      ? intent.excluded_tokens
+      : [];
+
+  if (excludedVehicleTokens.length) {
+    for (const excluded of excludedVehicleTokens) {
       const normalizedExcluded = normalizeText(excluded);
       const likeExcluded = `%${normalizedExcluded}%`;
 
@@ -2143,6 +2227,12 @@ function buildLocalAnswer({ intent, products }) {
   const preferenceText = intent.preferencias_comerciales?.economica
     ? "Ordené las opciones dando prioridad a productos con precio registrado más bajo."
     : "";
+  
+  const productBrandExclusionText =
+    Array.isArray(intent.excluded_product_brand_tokens) &&
+      intent.excluded_product_brand_tokens.length
+      ? `Tomé en cuenta que buscas una alternativa o una opción no original. La marca/fabricante final de la pieza debe validarla ventas.`
+      : "";
 
   if (intent.modo_busqueda === "EXPLORATORY") {
     const exclusionText =
@@ -2197,6 +2287,7 @@ function buildLocalAnswer({ intent, products }) {
     `Compatibilidad estimada: ${top.compatibilidad_estimada}%.`,
     conditionText ? `Nota: ${conditionText}` : "",
     preferenceText,
+    productBrandExclusionText,
     "Esta recomendación es orientativa. Ventas debe validar compatibilidad y disponibilidad final antes de confirmar la cotización.",
   ]
     .filter(Boolean)
@@ -2307,23 +2398,25 @@ function compareCandidatesByIntent(intent) {
 }
 
 function shouldIgnoreSessionContextForQuestion(rawIntent = {}) {
-  const hasExclusion =
-    Array.isArray(rawIntent.excluded_tokens) &&
-    rawIntent.excluded_tokens.length > 0;
-
-  if (!hasExclusion) return false;
+  const vehicleExclusions =
+    Array.isArray(rawIntent.excluded_vehicle_tokens)
+      ? rawIntent.excluded_vehicle_tokens
+      : Array.isArray(rawIntent.excluded_tokens)
+        ? rawIntent.excluded_tokens
+        : [];
 
   /**
-   * Si el usuario está diciendo "que no sea Nissan",
-   * no debemos meter contexto viejo como "NISSAN 2005".
+   * Solo ignoramos contexto cuando la exclusión es de vehículo/aplicación.
    */
-  return true;
+  return vehicleExclusions.length > 0;
 }
 
 function productMatchesExcluded(product = {}, intent = {}) {
-  const excludedTokens = Array.isArray(intent.excluded_tokens)
-    ? intent.excluded_tokens
-    : [];
+  const excludedTokens = Array.isArray(intent.excluded_vehicle_tokens)
+    ? intent.excluded_vehicle_tokens
+    : Array.isArray(intent.excluded_tokens)
+      ? intent.excluded_tokens
+      : [];
 
   if (!excludedTokens.length) return false;
 

@@ -159,6 +159,10 @@ function cleanAiText(value) {
   return cleanString(value)
     .replace(/^```(?:json|txt|text|markdown)?/i, "")
     .replace(/```$/i, "")
+    .replace(/\*\*/g, "")
+    .replace(/^\s*\|.*\|\s*$/gm, "")
+    .replace(/^\s*\|[-:\s|]+\|\s*$/gm, "")
+    .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
 
@@ -174,11 +178,21 @@ function buildOpenRouterMessages(messages = []) {
     "REGLA CRÍTICA: solo puedes usar los productos incluidos en CONTEXTO.",
     "No inventes códigos, piezas, compatibilidades, precios, stock, marcas ni aplicaciones.",
     "No recomiendes productos que no aparezcan en CONTEXTO.",
+    "Los productos ya se muestran en tarjetas visuales debajo de tu respuesta.",
+    "No hagas tablas.",
+    "No hagas listas largas de productos.",
+    "No repitas todos los códigos de productos.",
+    "No uses markdown, no uses negritas con **, no uses tablas con |.",
+    "Tu respuesta debe ser de máximo 3 oraciones.",
+    "Si hay productos, resume lo encontrado y pide datos faltantes si hace falta.",
+    "Si intencion_detectada.excluded_vehicle_tokens contiene una marca/modelo, no presentes opciones relacionadas con esa marca/modelo.",
+    "Si intencion_detectada.excluded_product_brand_tokens contiene una marca/fabricante, no afirmes que los productos son de otra marca salvo que el contexto tenga un campo explícito de marca del producto.",
+    "Si no existe marca del producto en el contexto, di que se tomó en cuenta la preferencia por alternativa/no original y que ventas valida marca/fabricante final.",
+    "No confundas aplicación del vehículo con fabricante de la pieza. Por ejemplo, 'Nissan March' en la descripción puede ser compatibilidad, no marca fabricante.",
     "No diagnostiques como mecánico; solo orienta y pide validación.",
     "Si falta marca, modelo, año o motor, pide esos datos de forma natural.",
     "Siempre aclara que ventas valida compatibilidad y disponibilidad final.",
-    "No uses formato JSON. Responde en español mexicano natural.",
-    "Si intencion_detectada.excluded_tokens contiene una marca/modelo, no presentes como válida ninguna opción relacionada con esa marca/modelo.",
+    "Responde en español mexicano natural.",
   ].join(" ");
 
   const compactPayload = {
@@ -189,6 +203,15 @@ function buildOpenRouterMessages(messages = []) {
       anio: payload?.intencion_detectada?.anio || null,
       motor: payload?.intencion_detectada?.motor || null,
       modo_busqueda: payload?.intencion_detectada?.modo_busqueda || null,
+
+      excluded_tokens: payload?.intencion_detectada?.excluded_tokens || [],
+      excluded_vehicle_tokens:
+        payload?.intencion_detectada?.excluded_vehicle_tokens || [],
+      excluded_product_brand_tokens:
+        payload?.intencion_detectada?.excluded_product_brand_tokens || [],
+      has_negation: payload?.intencion_detectada?.has_negation || false,
+      productos_se_muestran_en_tarjetas: true,
+
       sintomas_detectados:
         payload?.intencion_detectada?.sintomas_detectados || [],
       condiciones_detectadas:
@@ -197,8 +220,6 @@ function buildOpenRouterMessages(messages = []) {
         payload?.intencion_detectada?.preferencias_comerciales || {},
       contexto_sesion_aplicado:
         payload?.intencion_detectada?.contexto_sesion_aplicado || false,
-      excluded_tokens: payload?.intencion_detectada?.excluded_tokens || [],
-      has_negation: payload?.intencion_detectada?.has_negation || false,
     },
     contexto_productos: products.slice(0, 5).map((product) => ({
       codigo_andyfers: product.codigo_andyfers,
@@ -298,9 +319,9 @@ function parseJsonObjectFromAi(value) {
 }
 
 function coerceStringArray(value) {
-  if (!Array.isArray(value)) return [];
+  const source = Array.isArray(value) ? value : value ? [value] : [];
 
-  return value
+  return source
     .map((item) => cleanString(item).toUpperCase())
     .filter(Boolean)
     .slice(0, 8);
@@ -333,20 +354,50 @@ function normalizeSemanticIntentPayload(payload) {
   const preferencias = payload.preferencias || {};
   const vehiculo = payload.vehiculo || {};
 
+  const legacyExclusions = Array.isArray(payload.exclusiones)
+    ? coerceStringArray(payload.exclusiones)
+    : [];
+
+  const nestedExclusions =
+    payload.exclusiones && typeof payload.exclusiones === "object"
+      ? payload.exclusiones
+      : {};
+
+  const exclusionesVehiculo = [
+    ...coerceStringArray(payload.exclusiones_vehiculo),
+    ...coerceStringArray(nestedExclusions.vehiculo),
+    ...coerceStringArray(nestedExclusions.aplicacion),
+  ];
+
+  const exclusionesMarcaProducto = [
+    ...coerceStringArray(payload.exclusiones_marca_producto),
+    ...coerceStringArray(nestedExclusions.marca_producto),
+    ...coerceStringArray(nestedExclusions.producto),
+    ...coerceStringArray(nestedExclusions.fabricante),
+  ];
+
   return {
     pieza_normalizada: cleanString(payload.pieza_normalizada).toUpperCase() || null,
-    exclusiones: coerceStringArray(payload.exclusiones),
+
+    // Legacy: por compatibilidad. Ya no lo usamos como principal.
+    exclusiones: legacyExclusions,
+
+    exclusiones_vehiculo: [...new Set(exclusionesVehiculo)].slice(0, 8),
+    exclusiones_marca_producto: [...new Set(exclusionesMarcaProducto)].slice(0, 8),
+
     preferencias: {
       economica: coerceBoolean(preferencias.economica),
       no_original: coerceBoolean(preferencias.no_original),
       otra_marca: coerceBoolean(preferencias.otra_marca),
     },
+
     vehiculo: {
       marca_auto: cleanString(vehiculo.marca_auto).toUpperCase() || null,
       modelo_auto: cleanString(vehiculo.modelo_auto).toUpperCase() || null,
       anio: coerceYear(vehiculo.anio),
       motor: cleanString(vehiculo.motor).toUpperCase() || null,
     },
+
     tipo_busqueda:
       cleanString(payload.tipo_busqueda).toUpperCase() || "NO_DETERMINADO",
     confianza: coerceConfidence(payload.confianza),
@@ -370,9 +421,14 @@ function buildIntentNormalizerMessages({ question, localIntent }) {
         "Si el cliente pide 'bomba' y el contexto sugiere sistema de agua/enfriamiento, normaliza como BOMBA DE AGUA.",
         "Responde únicamente JSON válido, sin markdown.",
         "Formato obligatorio:",
+        "Clasifica exclusiones en dos grupos.",
+        "exclusiones_vehiculo: úsalo cuando el cliente diga que NO quiere piezas para/compatibles/con aplicación de una marca o modelo, por ejemplo 'no sea para Nissan', 'not for Nissan', 'que no le quede a Nissan'.",
+        "exclusiones_marca_producto: úsalo cuando el cliente hable de fabricante, marca de la pieza, original/OEM o alternativa, por ejemplo 'marca diferente a Nissan', 'fabricada por otra marca', 'no producida por Nissan', 'no original'.",
+        "Si el cliente dice 'marca diferente a Nissan' y ya hay contexto de vehículo Nissan, NO lo tomes como exclusión de vehículo; tómalo como exclusión_marca_producto.",
         JSON.stringify({
           pieza_normalizada: null,
-          exclusiones: [],
+          exclusiones_vehiculo: [],
+          exclusiones_marca_producto: [],
           preferencias: {
             economica: false,
             no_original: false,
