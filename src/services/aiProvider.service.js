@@ -518,6 +518,31 @@ export async function normalizeUserIntentWithAi({
   }
 }
 
+function responseLooksLikeProviderMetadata(response) {
+  const text = cleanString(response).toUpperCase();
+
+  if (!text) return true;
+
+  return (
+    /^USER SAFETY\s*:/i.test(response) ||
+    /SAFETY CATEGORIES\s*:/i.test(response) ||
+    /GUNS AND ILLEGAL WEAPONS/i.test(response) ||
+    /HARMFUL REQUEST/i.test(response) ||
+    /POLICY/i.test(response) ||
+    text.length < 12
+  );
+}
+
+function responseHasBadChatFormatting(response) {
+  const text = cleanString(response);
+
+  return (
+    /\|[-:\s|]+\|/.test(text) ||
+    /^\s*\|.*\|\s*$/m.test(text) ||
+    /\*\*/.test(text)
+  );
+}
+
 export async function generateAiAnswer({ messages = [] } = {}) {
   const config = getAiConfig();
 
@@ -557,6 +582,24 @@ export async function generateAiAnswer({ messages = [] } = {}) {
     if (!response) {
       return {
         service: "LOCAL_CONTROLADO",
+        response: null,
+      };
+    }
+
+    if (responseLooksLikeProviderMetadata(response)) {
+      console.warn("OpenRouter devolvió metadata/safety en vez de respuesta útil. Se usará respuesta local.");
+
+      return {
+        service: "LOCAL_CONTROLADO_AI_METADATA",
+        response: null,
+      };
+    }
+
+    if (responseHasBadChatFormatting(response)) {
+      console.warn("OpenRouter devolvió formato no apto para chat. Se usará respuesta local.");
+
+      return {
+        service: "LOCAL_CONTROLADO_BAD_FORMAT",
         response: null,
       };
     }

@@ -862,8 +862,30 @@ function hasVehicleOnlyIntent(question, intent) {
   return VEHICLE_ONLY_PATTERNS.some((pattern) => pattern.test(text)) || hasVehicle;
 }
 
+function detectVehicleAlias(question) {
+  const text = ` ${normalizeText(question)} `;
+
+  if (/\bGM\b/.test(text) || /\bGMC\b/.test(text) || /\bGENERAL MOTORS\b/.test(text)) {
+    return {
+      marca: "CHEVROLET",
+      modelo: null,
+      alias_detectado: "GM",
+    };
+  }
+
+  return null;
+}
+
 async function detectVehicleFromDb(question, excludedTokens = []) {
   const normalizedQuestion = ` ${normalizeSearchQuery(question)} `;
+  const vehicleAlias = detectVehicleAlias(question);
+
+  if (vehicleAlias) {
+    return {
+      marca: vehicleAlias.marca,
+      modelo: vehicleAlias.modelo,
+    };
+  }
   const tokens = getSearchTokens(question)
     .map((token) => normalizeText(token))
     .filter((token) => token.length >= MIN_FUZZY_TOKEN_LENGTH)
@@ -1021,6 +1043,68 @@ function shouldAllowExploratorySearch({ intent, directProductTerms, uncertainLan
   return hasDirectProduct;
 }
 
+function hasExplicitProductSearchIntent(question) {
+  const text = normalizeText(question);
+
+  return (
+    /\bBUSCO\b/.test(text) ||
+    /\bBUSCAR\b/.test(text) ||
+    /\bNECESITO\b/.test(text) ||
+    /\bOCUPO\b/.test(text) ||
+    /\bQUIERO\b/.test(text) ||
+    /\bCOTIZAR\b/.test(text) ||
+    /\bTIENES\b/.test(text) ||
+    /\bTENDRAS\b/.test(text) ||
+    /\bTENDRÁS\b/.test(text) ||
+    /\bMANEJAS\b/.test(text) ||
+    /\bVENDES\b/.test(text) ||
+    /\bCODIGO\b/.test(text) ||
+    /\bCÓDIGO\b/.test(text)
+  );
+}
+
+function hasDiagnosticLanguage(question) {
+  const text = normalizeText(question);
+
+  return (
+    /\bMI\s+(AUTO|CARRO|COCHE|VEHICULO|VEHÍCULO)\b/.test(text) ||
+    /\bSE\s+CALIENTA\b/.test(text) ||
+    /\bTIRA\b/.test(text) ||
+    /\bPIERDE\b/.test(text) ||
+    /\bGOTEA\b/.test(text) ||
+    /\bHACE\s+RUIDO\b/.test(text) ||
+    /\bSUENA\b/.test(text) ||
+    /\bQUE\s+PUEDE\s+SER\b/.test(text) ||
+    /\bQUÉ\s+PUEDE\s+SER\b/.test(text) ||
+    /\bQUE\s+SERA\b/.test(text) ||
+    /\bQUÉ\s+SERÁ\b/.test(text)
+  );
+}
+
+function hasVagueCoolingFluidDescription(question) {
+  const text = normalizeText(question);
+
+  return (
+    /\bLIQUIDO\b/.test(text) ||
+    /\bLÍQUIDO\b/.test(text) ||
+    /\bANTICONGELANTE\b/.test(text) ||
+    /\bDONDE\s+LE\s+PONGO\b/.test(text) ||
+    /\bDEPOSITO\b/.test(text) ||
+    /\bDEPÓSITO\b/.test(text)
+  ) && (
+      /\bTIRA\b/.test(text) ||
+      /\bPIERDE\b/.test(text) ||
+      /\bFUGA\b/.test(text) ||
+      /\bGOTEA\b/.test(text)
+    );
+}
+
+function hasSingleLetterVehicleHint(question) {
+  const text = normalizeText(question);
+
+  return /\bPARA\s+UN\s+[A-Z]\b/.test(text) || /\bPARA\s+UNA\s+[A-Z]\b/.test(text);
+}
+
 function buildIntentGate({ question, intent }) {
   const directProductTerms = detectDirectProductTerms(question);
   const symptomRules = detectSymptomRules(question);
@@ -1044,6 +1128,42 @@ function buildIntentGate({ question, intent }) {
 
   const searchableSymptoms = symptomRules.filter((rule) => rule.searchable);
   const nonSearchableSymptoms = symptomRules.filter((rule) => !rule.searchable);
+
+  const explicitProductSearch = hasExplicitProductSearchIntent(question);
+  const diagnosticLanguage = hasDiagnosticLanguage(question);
+
+  if (
+    searchableSymptoms.length > 0 &&
+    !hasVehicle &&
+    !hasCode &&
+    diagnosticLanguage &&
+    !explicitProductSearch
+  ) {
+    return {
+      allowed: false,
+      reason: "DIAGNOSTIC_SYMPTOM_WITHOUT_VEHICLE",
+      message:
+        "Con ese síntoma no conviene recomendar una pieza exacta todavía. Para ayudarte mejor dime marca, modelo, año y motor del vehículo. También ayuda saber si hay fuga, si sube la temperatura, si prende el ventilador o si pierde anticongelante.",
+      symptomRules,
+      directProductTerms,
+    };
+  }
+
+  if (
+    hasVagueCoolingFluidDescription(question) &&
+    !hasVehicle &&
+    !hasCode &&
+    diagnosticLanguage
+  ) {
+    return {
+      allowed: false,
+      reason: "VAGUE_COOLING_FLUID_WITHOUT_VEHICLE",
+      message:
+        "Por lo que describes, puede estar relacionado con el depósito de anticongelante, tapón, manguera, radiador o alguna fuga del sistema de enfriamiento. Para buscar una pieza correcta necesito marca, modelo, año y motor del vehículo.",
+      symptomRules,
+      directProductTerms,
+    };
+  }
 
   if (hasNonCatalogIntent(question) && !hasCode && !directProductTerms.length && !hasVehicle) {
     return {
@@ -1117,6 +1237,17 @@ function buildIntentGate({ question, intent }) {
       reason: "DIAGNOSTIC_WITHOUT_PART_OR_VEHICLE",
       message:
         "Con ese síntoma no conviene recomendar una pieza exacta todavía. Puede estar relacionado con el sistema de enfriamiento, tapón, depósito, radiador, circulación de anticongelante o incluso aire en el sistema. Dime marca, modelo, año, motor y si hay fuga o pérdida de anticongelante para ayudarte mejor.",
+      symptomRules,
+      directProductTerms,
+    };
+  }
+
+  if (hasSingleLetterVehicleHint(question) && !intent.modelo_auto && !intent.marca_auto) {
+    return {
+      allowed: false,
+      reason: "AMBIGUOUS_SINGLE_LETTER_VEHICLE",
+      message:
+        "Con solo una letra no puedo identificar el vehículo. Dime la marca y modelo completos, por ejemplo Chevrolet Chevy, GMC, Mazda 3, Gol, Golf, etc.",
       symptomRules,
       directProductTerms,
     };
@@ -2227,7 +2358,7 @@ function buildLocalAnswer({ intent, products }) {
   const preferenceText = intent.preferencias_comerciales?.economica
     ? "Ordené las opciones dando prioridad a productos con precio registrado más bajo."
     : "";
-  
+
   const productBrandExclusionText =
     Array.isArray(intent.excluded_product_brand_tokens) &&
       intent.excluded_product_brand_tokens.length
