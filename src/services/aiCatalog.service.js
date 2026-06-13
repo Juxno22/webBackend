@@ -6,7 +6,10 @@ import {
   getSearchTokens,
   clampNumber,
 } from "../utils/normalize.js";
-import { generateAiAnswer } from "./aiProvider.service.js";
+import {
+  generateAiAnswer,
+  normalizeUserIntentWithAi,
+} from "./aiProvider.service.js";
 import {
   getOrCreateSearchSession,
   mergeSessionContextWithIntent,
@@ -762,10 +765,13 @@ function extractExcludedTerms(question) {
 
   const patterns = [
     /\bQUE\s+NO\s+SEA\s+PARA\s+([A-Z0-9ÁÉÍÓÚÑ]+)/g,
+    /\bQUE\s+NO\s+SEA\s+DE\s+([A-Z0-9ÁÉÍÓÚÑ]+)/g,
     /\bQUE\s+NO\s+SEA\s+([A-Z0-9ÁÉÍÓÚÑ]+)/g,
     /\bNO\s+SEA\s+PARA\s+([A-Z0-9ÁÉÍÓÚÑ]+)/g,
+    /\bNO\s+SEA\s+DE\s+([A-Z0-9ÁÉÍÓÚÑ]+)/g,
     /\bNO\s+SEA\s+([A-Z0-9ÁÉÍÓÚÑ]+)/g,
     /\bNO\s+PARA\s+([A-Z0-9ÁÉÍÓÚÑ]+)/g,
+    /\bNO\s+DE\s+([A-Z0-9ÁÉÍÓÚÑ]+)/g,
     /\bEXCEPTO\s+([A-Z0-9ÁÉÍÓÚÑ]+)/g,
     /\bSIN\s+([A-Z0-9ÁÉÍÓÚÑ]+)/g,
     /\bNOT\s+FOR\s+([A-Z0-9ÁÉÍÓÚÑ]+)/g,
@@ -1338,6 +1344,214 @@ function detectStrictProductFamilyTokens({ directProductTerms = [], expansionTok
   return [];
 }
 
+const SEMANTIC_PRODUCT_MAP = {
+  "BOMBA": {
+    direct: ["BOMBA DE AGUA"],
+    product: ["BOMBA", "BOMBA AGUA", "BOMBA DE AGUA", "BOMBAS DE AGUA"],
+    strict: ["BOMBA", "BOMBAS", "BOMBA DE AGUA", "BOMBAS DE AGUA"],
+  },
+  "BOMBA DE AGUA": {
+    direct: ["BOMBA DE AGUA"],
+    product: ["BOMBA", "BOMBA AGUA", "BOMBA DE AGUA", "BOMBAS DE AGUA"],
+    strict: ["BOMBA", "BOMBAS", "BOMBA DE AGUA", "BOMBAS DE AGUA"],
+  },
+  "TERMOSTATO": {
+    direct: ["TERMOSTATO"],
+    product: ["TERMOSTATO", "TERMOSTATOS"],
+    strict: ["TERMOSTATO", "TERMOSTATOS"],
+  },
+  "RADIADOR": {
+    direct: ["RADIADOR"],
+    product: ["RADIADOR", "RADIADORES"],
+    strict: ["RADIADOR", "RADIADORES"],
+  },
+  "MANGUERA": {
+    direct: ["MANGUERA"],
+    product: ["MANGUERA", "MANGUERAS"],
+    strict: ["MANGUERA", "MANGUERAS"],
+  },
+  "TAPON": {
+    direct: ["TAPON", "TAPÓN"],
+    product: ["TAPON", "TAPÓN", "TAPON RADIADOR", "TAPON DEPOSITO"],
+    strict: ["TAPON", "TAPÓN"],
+  },
+  "SENSOR": {
+    direct: ["SENSOR"],
+    product: ["SENSOR", "BULBO", "SENSOR TEMPERATURA"],
+    strict: ["SENSOR", "BULBO"],
+  },
+  "EMPAQUE DE CABEZA": {
+    direct: ["EMPAQUE DE CABEZA", "JUNTA DE CABEZA", "JUNTA DE CULATA"],
+    product: [
+      "EMPAQUE",
+      "EMPAQUE CABEZA",
+      "EMPAQUE DE CABEZA",
+      "JUNTA CABEZA",
+      "JUNTA DE CABEZA",
+      "JUNTA CULATA",
+      "JUNTA DE CULATA",
+    ],
+    strict: [
+      "EMPAQUE",
+      "EMPAQUE CABEZA",
+      "EMPAQUE DE CABEZA",
+      "JUNTA CABEZA",
+      "JUNTA DE CABEZA",
+      "JUNTA CULATA",
+      "JUNTA DE CULATA",
+    ],
+  },
+};
+
+function hasSemanticNegationLanguage(question) {
+  const text = normalizeText(question);
+
+  return (
+    /\bNO\s+SEA\b/.test(text) ||
+    /\bOTRA\s+MARCA\b/.test(text) ||
+    /\bDISTINT[AO]\b/.test(text) ||
+    /\bDIFERENTE\b/.test(text) ||
+    /\bEXCEPTO\b/.test(text) ||
+    /\bALTERNATIV[AO]\b/.test(text) ||
+    /\bNO\s+PERTENEZCA\b/.test(text) ||
+    /\bNO\s+PROVENGA\b/.test(text) ||
+    /\bNO\s+EST[ÉE]\s+ASOCIAD[AO]\b/.test(text) ||
+    /\bNO\s+SEA\s+PRODUCID[AO]\b/.test(text) ||
+    /\bFABRICAD[AO]\s+POR\s+UNA\s+MARCA\s+DIFERENTE\b/.test(text) ||
+    /\bNOT\s+FOR\b/.test(text)
+  );
+}
+
+function shouldUseSemanticIntentNormalizer(question, localIntent) {
+  const rawEnabled = process.env.AI_INTENT_NORMALIZER_ENABLED;
+
+  const enabled =
+    rawEnabled === undefined
+      ? true
+      : ["1", "true", "yes", "on", "si", "sí"].includes(
+        String(rawEnabled).toLowerCase()
+      );
+
+  if (!enabled) return false;
+
+  const hasLocalExclusions =
+    Array.isArray(localIntent.excluded_tokens) &&
+    localIntent.excluded_tokens.length > 0;
+
+  if (hasSemanticNegationLanguage(question)) {
+    return true;
+  }
+
+  const hasProduct =
+    Array.isArray(localIntent.terminos_producto_detectados) &&
+    localIntent.terminos_producto_detectados.length > 0;
+
+  const hasCode =
+    Array.isArray(localIntent.numero_parte_tokens) &&
+    localIntent.numero_parte_tokens.length > 0;
+
+  const hasVehicle =
+    Boolean(localIntent.marca_auto) ||
+    Boolean(localIntent.modelo_auto) ||
+    Boolean(localIntent.anio) ||
+    Boolean(localIntent.motor);
+
+  const hasWeakIntent = !hasProduct && !hasCode && !hasVehicle;
+
+  if (hasWeakIntent && String(question).length > 20) {
+    return true;
+  }
+
+  return false;
+}
+
+function normalizeSemanticList(values = []) {
+  return unique(
+    values
+      .map((item) => normalizeText(item))
+      .filter(Boolean)
+      .filter((item) => item.length >= 2)
+  );
+}
+
+function applySemanticIntentToLocalIntent(localIntent, semanticIntent) {
+  if (!semanticIntent) return localIntent;
+
+  const pieza = normalizeText(semanticIntent.pieza_normalizada);
+  const productMap = SEMANTIC_PRODUCT_MAP[pieza] || null;
+
+  const semanticExclusions = normalizeSemanticList(semanticIntent.exclusiones);
+  const currentExclusions = normalizeSemanticList(localIntent.excluded_tokens);
+
+  const excludedTokens = unique([...currentExclusions, ...semanticExclusions]);
+
+  const next = {
+    ...localIntent,
+    excluded_tokens: excludedTokens,
+    has_negation: excludedTokens.length > 0 || Boolean(localIntent.has_negation),
+    normalizador_ia: semanticIntent,
+    normalizador_ia_aplicado: true,
+  };
+
+  if (productMap) {
+    next.terminos_producto_detectados = unique([
+      ...(localIntent.terminos_producto_detectados || []),
+      ...productMap.direct,
+    ]);
+
+    next.product_query_tokens = unique([
+      ...(localIntent.product_query_tokens || []),
+      ...productMap.product,
+    ]);
+
+    next.strict_product_family_tokens = unique([
+      ...(localIntent.strict_product_family_tokens || []),
+      ...productMap.strict,
+    ]);
+
+    next.tokens = unique([
+      ...(localIntent.tokens || []),
+      ...productMap.product,
+    ])
+      .map((token) => normalizeText(token))
+      .filter((token) => !STOP_WORDS.has(token));
+  }
+
+  const preferencias = semanticIntent.preferencias || {};
+  next.preferencias_comerciales = {
+    ...(localIntent.preferencias_comerciales || {}),
+    economica:
+      Boolean(localIntent.preferencias_comerciales?.economica) ||
+      Boolean(preferencias.economica),
+    no_original:
+      Boolean(localIntent.preferencias_comerciales?.no_original) ||
+      Boolean(preferencias.no_original),
+    otra_marca:
+      Boolean(localIntent.preferencias_comerciales?.otra_marca) ||
+      Boolean(preferencias.otra_marca),
+  };
+
+  const vehiculo = semanticIntent.vehiculo || {};
+
+  if (!next.marca_auto && vehiculo.marca_auto) {
+    next.marca_auto = normalizeText(vehiculo.marca_auto);
+  }
+
+  if (!next.modelo_auto && vehiculo.modelo_auto) {
+    next.modelo_auto = normalizeText(vehiculo.modelo_auto);
+  }
+
+  if (!next.anio && vehiculo.anio) {
+    next.anio = vehiculo.anio;
+  }
+
+  if (!next.motor && vehiculo.motor) {
+    next.motor = normalizeText(vehiculo.motor);
+  }
+
+  return next;
+}
+
 async function buildIntent(question) {
   const normalizedQuestion = normalizeSearchQuery(question);
   const excludedTokens = extractExcludedTerms(question);
@@ -1540,21 +1754,34 @@ function buildCandidateWhere(intent) {
   if (Array.isArray(intent.excluded_tokens) && intent.excluded_tokens.length) {
     for (const excluded of intent.excluded_tokens) {
       const normalizedExcluded = normalizeText(excluded);
+      const likeExcluded = `%${normalizedExcluded}%`;
 
       conditions.push(`
-        NOT EXISTS (
-          SELECT 1
-          FROM producto_aplicaciones pax
-          WHERE pax.producto_id = p.id
-            AND (
-              UPPER(COALESCE(pax.marca_auto, '')) LIKE ?
-              OR UPPER(COALESCE(pax.modelo_auto, '')) LIKE ?
-            )
-        )
-      `);
+      NOT EXISTS (
+        SELECT 1
+        FROM producto_aplicaciones pax
+        WHERE pax.producto_id = p.id
+          AND (
+            UPPER(COALESCE(pax.marca_auto, '')) LIKE ?
+            OR UPPER(COALESCE(pax.modelo_auto, '')) LIKE ?
+          )
+      )
+    `);
 
-      params.push(`%${normalizedExcluded}%`);
-      params.push(`%${normalizedExcluded}%`);
+      params.push(likeExcluded);
+      params.push(likeExcluded);
+
+      conditions.push("UPPER(COALESCE(p.descripcion, '')) NOT LIKE ?");
+      params.push(likeExcluded);
+
+      conditions.push("UPPER(COALESCE(p.descripcion_web, '')) NOT LIKE ?");
+      params.push(likeExcluded);
+
+      conditions.push("UPPER(COALESCE(p.armadora, '')) NOT LIKE ?");
+      params.push(likeExcluded);
+
+      conditions.push("UPPER(COALESCE(c.nombre, '')) NOT LIKE ?");
+      params.push(likeExcluded);
     }
   }
 
@@ -1993,16 +2220,6 @@ function buildAiMessages({ question, intent, products }) {
 
   return [
     {
-      role: "system",
-      content: [
-        "Eres el asistente de refacciones de Andyfers.",
-        "Responde únicamente usando los productos enviados en CONTEXTO.",
-        "No inventes códigos, compatibilidades, precios ni stock.",
-        "Si los datos del cliente son insuficientes, pide marca, modelo, año, motor o número de parte.",
-        "Sé breve, claro y comercial. Siempre aclara que ventas valida compatibilidad y disponibilidad final.",
-      ].join(" "),
-    },
-    {
       role: "user",
       content: JSON.stringify(
         {
@@ -2087,6 +2304,60 @@ function compareCandidatesByIntent(intent) {
 
     return Number(b.prioridad_ia || 0) - Number(a.prioridad_ia || 0);
   };
+}
+
+function shouldIgnoreSessionContextForQuestion(rawIntent = {}) {
+  const hasExclusion =
+    Array.isArray(rawIntent.excluded_tokens) &&
+    rawIntent.excluded_tokens.length > 0;
+
+  if (!hasExclusion) return false;
+
+  /**
+   * Si el usuario está diciendo "que no sea Nissan",
+   * no debemos meter contexto viejo como "NISSAN 2005".
+   */
+  return true;
+}
+
+function productMatchesExcluded(product = {}, intent = {}) {
+  const excludedTokens = Array.isArray(intent.excluded_tokens)
+    ? intent.excluded_tokens
+    : [];
+
+  if (!excludedTokens.length) return false;
+
+  const text = normalizeText(
+    [
+      product.codigo_andyfers,
+      product.codigo_importacion,
+      product.categoria,
+      product.armadora,
+      product.familia,
+      product.descripcion,
+      product.descripcion_web,
+      ...(Array.isArray(product.aplicaciones)
+        ? product.aplicaciones.flatMap((app) => [
+          app.marca_auto,
+          app.modelo_auto,
+          app.version_auto,
+          app.motor,
+        ])
+        : []),
+      ...(Array.isArray(product.cruces)
+        ? product.cruces.flatMap((cruce) => [
+          cruce.marca,
+          cruce.numero_parte,
+        ])
+        : []),
+    ].join(" ")
+  );
+
+  return excludedTokens.some((excluded) => {
+    const cleanExcluded = normalizeText(excluded);
+
+    return cleanExcluded && text.includes(cleanExcluded);
+  });
 }
 
 export async function searchCatalogWithAi({
@@ -2225,25 +2496,52 @@ export async function searchCatalogWithAi({
 
   const session = await getOrCreateSearchSession(rawSessionId);
 
-  const rawIntent = await buildIntent(cleanQuestion);
+  let rawIntent = await buildIntent(cleanQuestion);
 
-  const intent = mergeSessionContextWithIntent(
-    rawIntent,
-    session.contexto
-  );
+  if (shouldUseSemanticIntentNormalizer(cleanQuestion, rawIntent)) {
+    const semanticResult = await normalizeUserIntentWithAi({
+      question: cleanQuestion,
+      localIntent: rawIntent,
+    });
+
+    if (semanticResult.intent) {
+      rawIntent = applySemanticIntentToLocalIntent(
+        rawIntent,
+        semanticResult.intent
+      );
+
+      rawIntent.normalizador_ia_servicio = semanticResult.service;
+    } else {
+      rawIntent.normalizador_ia_servicio = semanticResult.service;
+    }
+  }
+
+  const ignoreSessionContext = shouldIgnoreSessionContextForQuestion(rawIntent);
+
+  const intent = ignoreSessionContext
+    ? {
+      ...rawIntent,
+      contexto_sesion_aplicado: false,
+      contexto_sesion_campos: [],
+      contexto_sesion_previo: session.contexto,
+      contexto_sesion_ignorado_por_exclusion: true,
+    }
+    : mergeSessionContextWithIntent(rawIntent, session.contexto);
 
   const gate = buildIntentGate({
     question: cleanQuestion,
     intent,
   });
 
-  const updatedContext = await updateSearchSessionContext({
-    sessionId: session.session_id,
-    previousContext: session.contexto,
-    intent,
-    question: cleanQuestion,
-    origen,
-  });
+  const updatedContext = ignoreSessionContext
+    ? {}
+    : await updateSearchSessionContext({
+      sessionId: session.session_id,
+      previousContext: session.contexto,
+      intent,
+      question: cleanQuestion,
+      origen,
+    });
 
   const effectiveIntent = {
     ...intent,
@@ -2310,6 +2608,7 @@ export async function searchCatalogWithAi({
 
       return formatCandidate(row, scoreData, details);
     })
+    .filter((product) => !productMatchesExcluded(product, effectiveIntent))
     .sort(compareCandidatesByIntent(effectiveIntent));
 
   const recommended = scored.slice(0, 6);
@@ -2353,13 +2652,13 @@ export async function searchCatalogWithAi({
   });
 
   return {
-  intencion: effectiveIntent,
-  session_id: session.session_id,
-  contexto_corto: updatedContext,
-  respuesta: answer,
-  servicio_ia: service,
-  total_candidatos: scored.length,
-  total_recomendados: recommended.length,
-  productos: recommended,
-};
+    intencion: effectiveIntent,
+    session_id: session.session_id,
+    contexto_corto: updatedContext,
+    respuesta: answer,
+    servicio_ia: service,
+    total_candidatos: scored.length,
+    total_recomendados: recommended.length,
+    productos: recommended,
+  };
 }
