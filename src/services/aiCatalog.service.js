@@ -19,6 +19,12 @@ import {
   buildVehicleContextText,
   hasVehicleContext,
 } from "./aiSession.service.js";
+import {
+  attributeMatchesMeasurement,
+  describeMeasurementFilters,
+  detectMeasurementFilters,
+  isMeasurementLikePartToken,
+} from "./catalog-ai/catalogMeasurements.service.js";
 
 const INVALID_CODES = new Set([
   "#N/A",
@@ -617,6 +623,10 @@ function looksLikePartNumber(rawToken) {
   // Evita años cuando vienen solos. Si el usuario escribió "código 2000",
   // eso se captura aparte en extractContextualPartNumbers().
   if (/^19[0-9]{2}$|^20[0-4][0-9]$/.test(token)) return false;
+
+  // Medidas como 70MM, 76 mm o 3 pulgadas no son códigos.
+  // En poleas se manejan como atributos numéricos.
+  if (isMeasurementLikePartToken(raw)) return false;
 
   if (STOP_WORDS.has(token)) return false;
 
@@ -1765,6 +1775,7 @@ async function buildIntent(question) {
   );
   const commercialPreferences = detectCommercialPreferences(question);
   const conditionWarnings = detectConditionWarnings(question);
+  const measurementFilters = detectMeasurementFilters(question);
   const motorCandidates = extractMotorCandidates(question);
   const motorAmbiguo = hasAmbiguousMotor(question);
   const synonyms = await getMatchingSynonyms(normalizedQuestion, excludedTokens);
@@ -1830,6 +1841,7 @@ async function buildIntent(question) {
     modelo_auto: vehicle.modelo,
     preferencias_comerciales: commercialPreferences,
     condiciones_detectadas: conditionWarnings,
+    medidas_detectadas: measurementFilters,
     motores_posibles: motorCandidates,
     motor_ambiguo: motorAmbiguo,
     product_query_tokens: productQueryTokens,
@@ -1865,6 +1877,9 @@ function buildCandidateWhere(intent) {
     : [];
   const strictProductFamilyTokens = Array.isArray(intent.strict_product_family_tokens)
     ? intent.strict_product_family_tokens
+    : [];
+  const measurementFilters = Array.isArray(intent.medidas_detectadas)
+    ? intent.medidas_detectadas
     : [];
 
   /**
@@ -1941,6 +1956,32 @@ function buildCandidateWhere(intent) {
       "(? BETWEEN COALESCE(pa.anio_inicio, ?) AND COALESCE(pa.anio_fin, ?))"
     );
     params.push(intent.anio, intent.anio, intent.anio);
+  }
+
+  for (const measurement of measurementFilters) {
+    const value = Number(measurement.valor_numero);
+    const tolerance = Number.isFinite(Number(measurement.tolerancia))
+      ? Number(measurement.tolerancia)
+      : 0;
+
+    if (!Number.isFinite(value) || !measurement.atributo_normalizado) continue;
+
+    conditions.push(`
+      EXISTS (
+        SELECT 1
+        FROM producto_atributos pam
+        WHERE pam.producto_id = p.id
+          AND pam.buscable = 1
+          AND pam.atributo_normalizado = ?
+          AND pam.valor_numero BETWEEN ? AND ?
+      )
+    `);
+
+    params.push(
+      normalizeText(measurement.atributo_normalizado),
+      value - tolerance,
+      value + tolerance
+    );
   }
 
   /**
@@ -2090,7 +2131,7 @@ async function getCandidateDetails(productIds) {
 
   const [atributos] = await pool.query(
     `
-    SELECT producto_id, atributo, valor_texto, valor_normalizado, unidad
+    SELECT producto_id, atributo, atributo_normalizado, valor_texto, valor_normalizado, valor_numero, unidad
     FROM producto_atributos
     WHERE producto_id IN (${placeholders}) AND buscable = 1
     ORDER BY producto_id, orden, atributo
@@ -2177,6 +2218,22 @@ function scoreCandidate(row, intent, details) {
         .slice(0, 4)
         .join(", ")}.`
     );
+  }
+
+  const measurementFilters = Array.isArray(intent.medidas_detectadas)
+    ? intent.medidas_detectadas
+    : [];
+
+  if (measurementFilters.length) {
+    const atributos = details.atributos || [];
+    const matchedMeasurements = measurementFilters.filter((measurement) =>
+      atributos.some((attribute) => attributeMatchesMeasurement(attribute, measurement))
+    );
+
+    if (matchedMeasurements.length) {
+      score += Math.min(matchedMeasurements.length * 28, 42);
+      reasons.push(`Coincide con medida solicitada: ${describeMeasurementFilters(matchedMeasurements)}.`);
+    }
   }
 
   const normalizedCodes = [
@@ -2289,7 +2346,9 @@ function formatCandidate(row, scoreData, details) {
 
   const atributos = (details.atributos || []).slice(0, 8).map((attr) => ({
     atributo: attr.atributo,
+    atributo_normalizado: attr.atributo_normalizado,
     valor: attr.valor_texto,
+    valor_numero: attr.valor_numero,
     unidad: attr.unidad,
   }));
 
@@ -2325,6 +2384,12 @@ function buildNoResultsAnswer(intent) {
 
   if (intent.marca_auto || intent.modelo_auto || intent.anio || intent.motor) {
     suggestions.push("Revisa que marca, modelo, año y motor estén correctos.");
+  }
+
+  if (Array.isArray(intent.medidas_detectadas) && intent.medidas_detectadas.length) {
+    suggestions.push(
+      `Detecté la medida "${describeMeasurementFilters(intent.medidas_detectadas)}", pero no encontré una coincidencia confiable.`
+    );
   }
 
   if (intent.terminos_producto_detectados.length) {
