@@ -135,6 +135,36 @@ export function extractContextFromIntent(intent = {}) {
         context.motores_posibles = intent.motores_posibles;
     }
 
+    if (intent.modo_conversacion === "DIAGNOSTIC_GUIDE") {
+        context.pendiente_modo = "DIAGNOSTIC_GUIDE";
+
+        if (Array.isArray(intent.sintomas_detectados) && intent.sintomas_detectados.length) {
+            context.pendiente_sintomas = intent.sintomas_detectados
+                .map((item) => ({
+                    key: cleanString(item.key).toUpperCase(),
+                    label: cleanString(item.label),
+                    searchable: item.searchable !== false,
+                }))
+                .filter((item) => item.key || item.label)
+                .slice(0, 6);
+        }
+
+        if (Array.isArray(intent.product_query_tokens) && intent.product_query_tokens.length) {
+            context.pendiente_product_query_tokens = intent.product_query_tokens.slice(0, 16);
+        }
+
+        if (Array.isArray(intent.terminos_producto_detectados) && intent.terminos_producto_detectados.length) {
+            context.pendiente_terminos_producto = intent.terminos_producto_detectados.slice(0, 8);
+        }
+    }
+
+    if (intent.limpiar_pendiente_asesoria) {
+        delete context.pendiente_modo;
+        delete context.pendiente_sintomas;
+        delete context.pendiente_product_query_tokens;
+        delete context.pendiente_terminos_producto;
+    }
+
     return context;
 }
 
@@ -144,6 +174,15 @@ export function hasVehicleContext(context = {}) {
         context.modelo_auto ||
         context.anio ||
         context.motor
+    );
+}
+
+function hasAdvisorContext(context = {}) {
+    return Boolean(
+        Array.isArray(context.pendiente_sintomas) && context.pendiente_sintomas.length ||
+        Array.isArray(context.pendiente_product_query_tokens) && context.pendiente_product_query_tokens.length ||
+        Array.isArray(context.pendiente_terminos_producto) && context.pendiente_terminos_producto.length ||
+        context.pendiente_modo
     );
 }
 
@@ -167,6 +206,12 @@ export function mergeSessionContextWithIntent(intent = {}, sessionContext = {}) 
     if (!hasCurrentModelo && sessionContext.modelo_auto) applied.push("modelo_auto");
     if (!hasCurrentAnio && sessionContext.anio) applied.push("anio");
     if (!hasCurrentMotor && sessionContext.motor) applied.push("motor");
+    if (Array.isArray(sessionContext.pendiente_sintomas) && sessionContext.pendiente_sintomas.length) {
+        merged.pendiente_sintomas_sesion = sessionContext.pendiente_sintomas;
+    }
+    if (sessionContext.pendiente_modo) {
+        merged.pendiente_modo_sesion = sessionContext.pendiente_modo;
+    }
 
     return {
         ...merged,
@@ -190,7 +235,7 @@ export async function updateSearchSessionContext({
         ...extracted,
     };
 
-    const hasContext = hasVehicleContext(nextContext);
+        const hasContext = hasVehicleContext(nextContext) || hasAdvisorContext(nextContext);
 
     if (!hasContext) {
         return nextContext;

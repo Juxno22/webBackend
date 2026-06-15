@@ -1,12 +1,5 @@
-import { pool } from "../config/db.js";
 import {
-  normalizePartNumber,
-  normalizeSearchQuery,
-  normalizeText,
-  getSearchTokens,
-  clampNumber,
-} from "../utils/normalize.js";
-import {
+  generateAiAdvisorAnswer,
   generateAiAnswer,
   normalizeUserIntentWithAi,
 } from "./aiProvider.service.js";
@@ -16,2637 +9,283 @@ import {
   updateSearchSessionContext,
   resetSearchSession,
   shouldResetSearchSession,
-  buildVehicleContextText,
   hasVehicleContext,
 } from "./aiSession.service.js";
+import { cleanString } from "./catalog-ai/catalogUtils.service.js";
 import {
-  attributeMatchesMeasurement,
-  describeMeasurementFilters,
-  detectMeasurementFilters,
-  isMeasurementLikePartToken,
-} from "./catalog-ai/catalogMeasurements.service.js";
-
-const INVALID_CODES = new Set([
-  "#N/A",
-  "N/A",
-  "NA",
-  "ND",
-  "N.D.",
-  "SIN CODIGO",
-  "SIN CÓDIGO",
-  "NULL",
-  "0",
-]);
-
-const STOP_WORDS = new Set([
-  "BUSCO",
-  "BUSCAR",
-  "QUIERO",
-  "NECESITO",
-  "OCUPO",
-  "DAME",
-  "DIME",
-  "COTIZAR",
-  "COTIZACION",
-  "COTIZACIÓN",
-  "REFACCION",
-  "REFACCIÓN",
-  "REFACCIONES",
-  "PIEZA",
-  "PIEZAS",
-  "PARTE",
-  "PARTES",
-  "PARA",
-  "DEL",
-  "DE",
-  "LA",
-  "EL",
-  "LOS",
-  "LAS",
-  "LO",
-  "CON",
-  "SIN",
-  "UN",
-  "UNA",
-  "UNO",
-  "EN",
-  "A",
-  "Y",
-  "O",
-  "QUE",
-  "QUÉ",
-  "CUAL",
-  "CUÁL",
-  "CUALES",
-  "CUÁLES",
-  "COMO",
-  "CÓMO",
-  "MI",
-  "ME",
-  "SE",
-  "LE",
-  "TE",
-  "ESTA",
-  "ESTÁ",
-  "ESTE",
-  "TENGO",
-  "TIENE",
-  "TRAIGO",
-  "AUTO",
-  "CARRO",
-  "COCHE",
-  "VEHICULO",
-  "VEHÍCULO",
-  "NO",
-  "ARRANCA",
-  "ARRANCAR",
-  "PRENDE",
-  "PRENDER",
-  "ENCIENDE",
-  "ENCENDER",
-  "FALLA",
-  "FALLANDO",
-  "CALIENTA",
-  "CALENTANDO",
-  "REGANDO",
-  "TIRANDO",
-  "GOTEA",
-  "FUGA",
-  "LIQUIDO",
-  "LÍQUIDO",
-  "TIRA",
-  "PARECE",
-  "PARECIERA",
-  "CREO",
-  "CREERIA",
-  "CREERÍA",
-  "QUIZA",
-  "QUIZÁ",
-  "TALVEZ",
-  "TAL",
-  "VEZ",
-  "COMO",
-  "LIQUIDO",
-  "LÍQUIDO",
-  "AGUA",
-  "SEA",
-  "SER",
-]);
-
-const NON_CATALOG_PATTERNS = [
-  /\bCLIMA\b/,
-  /\bWEATHER\b/,
-  /\bPRONOSTICO\b/,
-  /\bPRONÓSTICO\b/,
-  /\bHORA\b/,
-  /\bNOTICIAS\b/,
-  /\bRECETA\b/,
-  /\bHOTEL\b/,
-  /\bVUELO\b/,
-  /\bVIAJE\b/,
-];
-
-const DIRECT_PRODUCT_TERMS = [
-  "TERMOSTATO",
-  "BOMBA",
-  "BOMBA DE AGUA",
-  "RADIADOR",
-  "MANGUERA",
-  "POLEA",
-  "BANDA",
-  "TAPON",
-  "TAPON RADIADOR",
-  "TAPÓN",
-  "DEPOSITO",
-  "DEPÓSITO",
-  "ANTICONGELANTE",
-  "SENSOR",
-  "BULBO",
-  "TOMA",
-  "TOMA DE AGUA",
-  "BRIDA",
-  "VENTILADOR",
-  "MOTOVENTILADOR",
-  "FILTRO",
-  "JUNTA",
-  "RETEN",
-  "RETÉN",
-];
-const UNCERTAIN_PATTERNS = [
-  /\bPARECE\b/,
-  /\bPARECIERA\b/,
-  /\bCREO QUE\b/,
-  /\bCREO\b/,
-  /\bNO SE\b/,
-  /\bNO SÉ\b/,
-  /\bCOMO QUE\b/,
-  /\bES COMO\b/,
-  /\bTAL VEZ\b/,
-  /\bTALVEZ\b/,
-  /\bQUIZA\b/,
-  /\bQUIZÁ\b/,
-];
-
-const GENERIC_PRODUCT_TERMS_REQUIRE_VEHICLE = new Set([
-  "BOMBA",
-  "BOMBA DE AGUA",
-  "BOMBAS",
-  "MANGUERA",
-  "TUBO",
-  "TUBO AGUA",
-  "TUBO DE AGUA",
-  "TAPON",
-  "TAPÓN",
-  "DEPOSITO",
-  "DEPÓSITO",
-  "SENSOR",
-  "BULBO",
-  "TOMA",
-  "TOMA AGUA",
-  "TOMA DE AGUA",
-  "BRIDA",
-  "RADIADOR",
-]);
-
-const SYMPTOM_RULES = [
-  {
-    key: "COOLING_OVERHEAT",
-    label: "posible problema de sistema de enfriamiento",
-    patterns: [
-      /\bSE CALIENTA\b/,
-      /\bCALIENTA\b/,
-      /\bCALENTANDO\b/,
-      /\bSUBE LA TEMPERATURA\b/,
-      /\bTEMPERATURA ALTA\b/,
-      /\bHIERVE\b/,
-    ],
-    tokens: [
-      "TERMOSTATO",
-      "BOMBA AGUA",
-      "BOMBA DE AGUA",
-      "RADIADOR",
-      "MANGUERA",
-      "TAPON",
-      "TAPON RADIADOR",
-      "DEPOSITO",
-      "ANTICONGELANTE",
-      "BULBO",
-      "SENSOR TEMPERATURA",
-      "VENTILADOR",
-      "MOTOVENTILADOR",
-    ],
-    searchable: true,
-  },
-  {
-    key: "COOLING_LEAK",
-    label: "posible fuga de anticongelante",
-    patterns: [
-      /\bREGANDO\b/,
-      /\bTIRANDO\b/,
-      /\bTIRA\b/,
-      /\bFUGA\b/,
-      /\bGOTEA\b/,
-      /\bPIERDE ANTICONGELANTE\b/,
-      /\bTIRA ANTICONGELANTE\b/,
-      /\bTIRANDO ANTICONGELANTE\b/,
-      /\bREGANDO ANTICONGELANTE\b/,
-      /\bTIRA LIQUIDO\b/,
-      /\bTIRA LÍQUIDO\b/,
-      /\bTIRANDO LIQUIDO\b/,
-      /\bTIRANDO LÍQUIDO\b/,
-      /\bREGANDO LIQUIDO\b/,
-      /\bREGANDO LÍQUIDO\b/,
-      /\bTIRA AGUA\b/,
-      /\bTIRANDO AGUA\b/,
-    ],
-    tokens: [
-      "MANGUERA",
-      "RADIADOR",
-      "DEPOSITO",
-      "DEPÓSITO",
-      "TAPON",
-      "TAPON RADIADOR",
-      "TOMA AGUA",
-      "TOMA DE AGUA",
-      "BOMBA AGUA",
-      "BOMBA DE AGUA",
-      "ANTICONGELANTE",
-      "BRIDA",
-    ],
-    searchable: true,
-  },
-  {
-    key: "NO_START",
-    label: "falla de arranque demasiado general",
-    patterns: [
-      /\bNO ARRANCA\b/,
-      /\bNO PRENDE\b/,
-      /\bNO ENCIENDE\b/,
-      /\bBATALLA PARA PRENDER\b/,
-    ],
-    tokens: [],
-    searchable: false,
-  },
-];
-// Extensiones controladas para entrenamiento del buscador.
-[
-  "PONCHA",
-  "PERDIDA",
-  "PÉRDIDA",
-  "SUBIDA",
-  "PLANO",
-  "CARRETERA",
-  "CLIMA",
-  "AIRE",
-  "AC",
-  "TANQUE",
-  "DIFERENCIA",
-  "COMPARAR",
-  "COMPARACION",
-  "COMPARACIÓN",
-  "MEJOR",
-  "PEOR",
-  "VS",
-  "LLUEVE",
-  "LLUVIA",
-  "MOJA",
-  "MOJADO",
-  "CUANDO",
-  "SOLO",
-  "SÓLO",
-  "RUIDO",
-  "SUENA",
-  "HACE",
-  "HIRVIERA",
-  "BARATA",
-  "BARATO",
-  "ECONOMICA",
-  "ECONÓMICA",
-  "ECONOMICO",
-  "ECONÓMICO",
-  "GENERICA",
-  "GENÉRICA",
-  "GENERICO",
-  "GENÉRICO",
-  "ORIGINAL",
-  "PROXIMA",
-  "PRÓXIMA",
-  "SEMANA",
-  "CUANDO",
-  "VAN",
-  "TENER",
-  "NEED",
-  "WATER",
-  "PUMP",
-  "FOR",
-  "NOT",
-].forEach((word) => STOP_WORDS.add(word));
-
-[
-  "PASTILLAS",
-  "PASTILLAS FRENO",
-  "PASTILLAS DE FRENO",
-  "BALATAS",
-  "FRENOS",
-  "TUBO",
-  "TUBO DE AGUA",
-  "TUBO AGUA",
-  "EMPAQUE",
-  "EMPAQUE CABEZA",
-  "EMPAQUE DE CABEZA",
-  "JUNTA CABEZA",
-  "JUNTA DE CABEZA",
-  "JUNTA CULATA",
-  "JUNTA DE CULATA",
-  "WATER PUMP",
-].forEach((term) => {
-  if (!DIRECT_PRODUCT_TERMS.includes(term)) {
-    DIRECT_PRODUCT_TERMS.push(term);
-  }
-});
-
-[
-  "PASTILLAS",
-  "PASTILLAS FRENO",
-  "PASTILLAS DE FRENO",
-  "BALATAS",
-  "FRENOS",
-  "TUBO",
-  "TUBO DE AGUA",
-  "TUBO AGUA",
-  "EMPAQUE",
-  "EMPAQUE CABEZA",
-  "EMPAQUE DE CABEZA",
-  "JUNTA CABEZA",
-  "JUNTA DE CABEZA",
-  "JUNTA CULATA",
-  "JUNTA DE CULATA",
-  "WATER PUMP",
-].forEach((term) => GENERIC_PRODUCT_TERMS_REQUIRE_VEHICLE.add(term));
-
-const QUERY_EXPANSION_RULES = [
-  {
-    key: "TAPON_TANQUE_AGUA_RADIADOR",
-    patterns: [
-      /\bTAPON\b.*\bTANQUE\b.*\bAGUA\b/,
-      /\bTAPON\b.*\bDEPOSITO\b.*\bAGUA\b/,
-      /\bTAPON\b.*\bDEPOSITO\b.*\bANTICONGELANTE\b/,
-      /\bTAPON\b.*\bRADIADOR\b/,
-      /\bTAPÓN\b.*\bTANQUE\b.*\bAGUA\b/,
-      /\bTAPÓN\b.*\bDEPOSITO\b.*\bAGUA\b/,
-      /\bTAPÓN\b.*\bRADIADOR\b/,
-    ],
-    tokens: [
-      "TAPON",
-      "TAPÓN",
-      "TAPON RADIADOR",
-      "TAPON DEPOSITO",
-      "DEPOSITO",
-      "RADIADOR",
-      "ANTICONGELANTE",
-    ],
-  },
-  {
-    key: "FRENOS",
-    patterns: [
-      /\bPASTILLAS\b.*\bFRENO\b/,
-      /\bPASTILLAS\b.*\bFRENOS\b/,
-      /\bBALATAS\b/,
-    ],
-    tokens: ["PASTILLAS", "PASTILLAS FRENO", "PASTILLAS DE FRENO", "BALATAS", "FRENOS"],
-  },
-  {
-    key: "CLIMA_CALENTAMIENTO",
-    patterns: [
-      /\bUSO\b.*\bCLIMA\b/,
-      /\bPRENDO\b.*\bCLIMA\b/,
-      /\bAIRE\b.*\bACONDICIONADO\b/,
-      /\bCON\b.*\bCLIMA\b/,
-    ],
-    tokens: ["VENTILADOR", "MOTOVENTILADOR", "RADIADOR", "SENSOR TEMPERATURA"],
-  },
-  {
-    key: "EMPAQUE_CABEZA",
-    patterns: [
-      /\bEMPAQUE\b.*\bCABEZA\b/,
-      /\bJUNTA\b.*\bCABEZA\b/,
-      /\bJUNTA\b.*\bCULATA\b/,
-      /\bEMPAQUE\b.*\bCULATA\b/,
-    ],
-    tokens: [
-      "EMPAQUE CABEZA",
-      "EMPAQUE DE CABEZA",
-      "JUNTA CABEZA",
-      "JUNTA DE CABEZA",
-      "JUNTA CULATA",
-      "JUNTA DE CULATA",
-    ],
-  },
-  {
-    key: "WATER_PUMP_ENGLISH",
-    patterns: [
-      /\bWATER\b.*\bPUMP\b/,
-    ],
-    tokens: [
-      "BOMBA",
-      "BOMBA AGUA",
-      "BOMBA DE AGUA",
-    ],
-  },
-  {
-    key: "LLUVIA_POSIBLE_ELECTRICO",
-    patterns: [
-      /\bLLUEVE\b/,
-      /\bLLUVIA\b/,
-      /\bMOJA\b/,
-      /\bMOJADO\b/,
-    ],
-    tokens: [
-      "SENSOR",
-      "BULBO",
-      "SENSOR TEMPERATURA",
-    ],
-  },
-  {
-    key: "RUIDO_HIRVIERA_AGUA",
-    patterns: [
-      /\bRUIDO\b.*\bHIRVIERA\b/,
-      /\bCOMO\b.*\bHIRVIERA\b.*\bAGUA\b/,
-      /\bSUENA\b.*\bHIRVIERA\b/,
-    ],
-    tokens: [
-      "TAPON",
-      "TAPON RADIADOR",
-      "DEPOSITO",
-      "RADIADOR",
-      "BOMBA DE AGUA",
-    ],
-  },
-];
-
-const COMPARISON_PATTERNS = [
-  /\bDIFERENCIA\b/,
-  /\bCOMPARAR\b/,
-  /\bCOMPARACION\b/,
-  /\bCOMPARACIÓN\b/,
-  /\bMEJOR\b/,
-  /\bPEOR\b/,
-  /\bVS\b/,
-];
-
-const STOCK_BRANCH_PATTERNS = [
-  /\bSUCURSAL\b/,
-  /\bTIENDA\b/,
-  /\bALMACEN\b/,
-  /\bGUADALAJARA\b/,
-  /\bCDMX\b/,
-  /\bMONTERREY\b/,
-  /\bPUEBLA\b/,
-];
-
-const STOCK_INTENT_PATTERNS = [
-  /\bSTOCK\b/,
-  /\bDISPONIBLE\b/,
-  /\bDISPONIBILIDAD\b/,
-  /\bHAY\b/,
-  /\bTIENES\b/,
-  /\bTIENEN\b/,
-];
-
-const VEHICLE_ONLY_PATTERNS = [
-  /\bREFACCION\b/,
-  /\bREFACCIÓN\b/,
-  /\bPIEZA\b/,
-  /\bPARTE\b/,
-  /\bALGO\b/,
-];
-
-const NEGATION_PATTERNS = [
-  /\bQUE\s+NO\s+SEA\s+PARA\s+([A-Z0-9ÁÉÍÓÚÑ]+)/g,
-  /\bQUE\s+NO\s+SEA\s+([A-Z0-9ÁÉÍÓÚÑ]+)/g,
-  /\bNO\s+SEA\s+PARA\s+([A-Z0-9ÁÉÍÓÚÑ]+)/g,
-  /\bNO\s+SEA\s+([A-Z0-9ÁÉÍÓÚÑ]+)/g,
-  /\bNO\s+PARA\s+([A-Z0-9ÁÉÍÓÚÑ]+)/g,
-  /\bEXCEPTO\s+([A-Z0-9ÁÉÍÓÚÑ]+)/g,
-  /\bSIN\s+([A-Z0-9ÁÉÍÓÚÑ]+)/g,
-  /\bNOT\s+FOR\s+([A-Z0-9ÁÉÍÓÚÑ]+)/g,
-  /\bNOT\s+([A-Z0-9ÁÉÍÓÚÑ]+)/g,
-  /\bNO\s+LA\s+ORIGINAL\b/g,
-  /\bNO\s+ORIGINAL\b/g,
-];
-
-const PART_NUMBER_CONTEXT_PATTERNS = [
-  /\bCODIGO\s+([A-Z0-9.\-\/]{2,})\b/g,
-  /\bCÓDIGO\s+([A-Z0-9.\-\/]{2,})\b/g,
-  /\bCLAVE\s+([A-Z0-9.\-\/]{2,})\b/g,
-  /\bNUMERO\s+DE\s+PARTE\s+([A-Z0-9.\-\/]{2,})\b/g,
-  /\bNÚMERO\s+DE\s+PARTE\s+([A-Z0-9.\-\/]{2,})\b/g,
-  /\bNO\s+DE\s+PARTE\s+([A-Z0-9.\-\/]{2,})\b/g,
-  /\bPIEZA\s+([A-Z0-9.\-\/]{2,})\b/g,
-  /\bREFACCION\s+([A-Z0-9.\-\/]{2,})\b/g,
-  /\bREFACCIÓN\s+([A-Z0-9.\-\/]{2,})\b/g,
-];
-
-const MIN_FUZZY_TOKEN_LENGTH = 4;
-
-function cleanString(value) {
-  if (value === undefined || value === null) return "";
-  return String(value).trim();
-}
-
-function isValidPublicCode(value) {
-  const clean = normalizeText(value);
-  return clean !== "" && !INVALID_CODES.has(clean);
-}
-
-function unique(values) {
-  return [...new Set(values.filter(Boolean))];
-}
-
-function extractYear(question) {
-  const matches = String(question).match(/\b(19[0-9]{2}|20[0-4][0-9])\b/g) || [];
-
-  if (!matches.length) return null;
-
-  const year = Number(matches[matches.length - 1]);
-  return Number.isFinite(year) ? year : null;
-}
-
-function extractMotor(question) {
-  const text = normalizeText(question);
-
-  const decimalMatch = text.match(
-    /\b([0-9]{1}\.[0-9])\s*(L|LT|LTS|LITROS?)?\b/
-  );
-
-  if (decimalMatch) {
-    if (hasAmbiguousMotor(question)) return null;
-    return decimalMatch[1];
-  }
-
-  const ccMatch =
-    text.match(/\b([0-9]{3,4})\s*CC\b/) ||
-    text.match(/\b([0-9]{3,4})CC\b/);
-
-  if (ccMatch) return `${ccMatch[1]} CC`;
-
-  return null;
-}
-
-function extractContextualPartNumbers(question) {
-  const text = normalizeText(question);
-  const codes = [];
-
-  for (const pattern of PART_NUMBER_CONTEXT_PATTERNS) {
-    let match;
-
-    while ((match = pattern.exec(text)) !== null) {
-      if (match[1]) {
-        const code = normalizePartNumber(match[1]);
-
-        if (code && code.length >= 2 && !INVALID_CODES.has(code)) {
-          codes.push(code);
-        }
-      }
-    }
-  }
-
-  return unique(codes).slice(0, 8);
-}
-
-function looksLikePartNumber(rawToken) {
-  const raw = String(rawToken || "").trim();
-  const token = normalizePartNumber(raw);
-
-  if (!token) return false;
-
-  // Evita años cuando vienen solos. Si el usuario escribió "código 2000",
-  // eso se captura aparte en extractContextualPartNumbers().
-  if (/^19[0-9]{2}$|^20[0-4][0-9]$/.test(token)) return false;
-
-  // Medidas como 70MM, 76 mm o 3 pulgadas no son códigos.
-  // En poleas se manejan como atributos numéricos.
-  if (isMeasurementLikePartToken(raw)) return false;
-
-  if (STOP_WORDS.has(token)) return false;
-
-  // Códigos numéricos tipo 13346, 202160.
-  if (/^\d{4,}$/.test(token)) return true;
-
-  // Códigos alfanuméricos cortos tipo A12, B45, T88.
-  if (/[A-Z]/.test(token) && /\d/.test(token) && token.length >= 3) {
-    return true;
-  }
-
-  // Códigos con separadores: ABC-123, 12.025, KG/8854.
-  if (/[-./]/.test(raw) && /\d/.test(raw) && token.length >= 3) {
-    return true;
-  }
-
-  return false;
-}
-
-function extractPartNumbers(question) {
-  const contextualCodes = extractContextualPartNumbers(question);
-
-  const rawTokens =
-    String(question).match(/[A-Za-z0-9][A-Za-z0-9.\-\/]{2,}/g) || [];
-
-  const looseCodes = rawTokens
-    .filter((token) => looksLikePartNumber(token))
-    .map((token) => normalizePartNumber(token));
-
-  return unique([...contextualCodes, ...looseCodes]).slice(0, 8);
-}
-
-function extractPlainTokens(question) {
-  const baseTokens = getSearchTokens(question)
-    .flatMap((token) => normalizeSearchQuery(token).split(" "))
-    .map((token) => normalizeText(token.trim()))
-    .filter(Boolean)
-    .filter((token) => token.length >= 2)
-    .filter((token) => !STOP_WORDS.has(token));
-
-  return unique(baseTokens).slice(0, 12);
-}
-
-async function getMatchingSynonyms(normalizedQuestion, excludedTokens = []) {
-  const [rows] = await pool.query(
-    `
-    SELECT tipo, texto_usuario, texto_normalizado
-    FROM sinonimos_busqueda
-    WHERE activo = 1
-    ORDER BY tipo, texto_usuario
-    `
-  );
-
-  return rows
-    .filter((row) => {
-      if (
-        isExcludedValue(row.texto_usuario, excludedTokens) ||
-        isExcludedValue(row.texto_normalizado, excludedTokens)
-      ) {
-        return false;
-      }
-
-      const userText = normalizeSearchQuery(row.texto_usuario);
-      const normalizedText = normalizeSearchQuery(row.texto_normalizado);
-
-      return (
-        (userText && normalizedQuestion.includes(userText)) ||
-        (normalizedText && normalizedQuestion.includes(normalizedText))
-      );
-    })
-    .slice(0, 20);
-}
-
-function levenshteinDistance(a, b) {
-  const left = normalizeText(a);
-  const right = normalizeText(b);
-
-  if (!left || !right) return 999;
-  if (Math.abs(left.length - right.length) > 2) return 999;
-
-  const matrix = Array.from({ length: right.length + 1 }, () =>
-    Array(left.length + 1).fill(0)
-  );
-
-  for (let i = 0; i <= left.length; i++) matrix[0][i] = i;
-  for (let j = 0; j <= right.length; j++) matrix[j][0] = j;
-
-  for (let j = 1; j <= right.length; j++) {
-    for (let i = 1; i <= left.length; i++) {
-      const cost = left[i - 1] === right[j - 1] ? 0 : 1;
-
-      matrix[j][i] = Math.min(
-        matrix[j][i - 1] + 1,
-        matrix[j - 1][i] + 1,
-        matrix[j - 1][i - 1] + cost
-      );
-    }
-  }
-
-  return matrix[right.length][left.length];
-}
-
-function safeFuzzyFind(token, candidates, maxDistance = 1) {
-  const cleanToken = normalizeText(token);
-
-  if (!cleanToken) return null;
-  if (cleanToken.length < MIN_FUZZY_TOKEN_LENGTH) return null;
-  if (STOP_WORDS.has(cleanToken)) return null;
-  if (/^\d+$/.test(cleanToken)) return null;
-
-  for (const candidate of candidates) {
-    const cleanCandidate = normalizeText(candidate);
-
-    if (!cleanCandidate) continue;
-
-    // Coincidencia exacta por token.
-    if (cleanToken === cleanCandidate) return candidate;
-
-    // Permite "nisan" -> "NISSAN", pero evita matches demasiado abiertos.
-    if (levenshteinDistance(cleanToken, cleanCandidate) <= maxDistance) {
-      return candidate;
-    }
-  }
-
-  return null;
-}
-
-function getExpansionTokens(question) {
-  const text = normalizeText(question);
-  const expansions = [];
-
-  for (const rule of QUERY_EXPANSION_RULES) {
-    const matched = rule.patterns.some((pattern) => pattern.test(text));
-
-    if (matched) {
-      expansions.push(...rule.tokens);
-    }
-  }
-
-  return unique(expansions);
-}
-
-function extractExcludedTerms(question) {
-  const text = normalizeText(question);
-  const excluded = [];
-
-  const patterns = [
-    /\bQUE\s+NO\s+SEA\s+PARA\s+([A-Z0-9ÁÉÍÓÚÑ]+)/g,
-    /\bQUE\s+NO\s+SEA\s+DE\s+([A-Z0-9ÁÉÍÓÚÑ]+)/g,
-    /\bQUE\s+NO\s+SEA\s+([A-Z0-9ÁÉÍÓÚÑ]+)/g,
-    /\bNO\s+SEA\s+PARA\s+([A-Z0-9ÁÉÍÓÚÑ]+)/g,
-    /\bNO\s+SEA\s+DE\s+([A-Z0-9ÁÉÍÓÚÑ]+)/g,
-    /\bNO\s+SEA\s+([A-Z0-9ÁÉÍÓÚÑ]+)/g,
-    /\bNO\s+PARA\s+([A-Z0-9ÁÉÍÓÚÑ]+)/g,
-    /\bNO\s+DE\s+([A-Z0-9ÁÉÍÓÚÑ]+)/g,
-    /\bEXCEPTO\s+([A-Z0-9ÁÉÍÓÚÑ]+)/g,
-    /\bSIN\s+([A-Z0-9ÁÉÍÓÚÑ]+)/g,
-    /\bNOT\s+FOR\s+([A-Z0-9ÁÉÍÓÚÑ]+)/g,
-  ];
-
-  const ignoredExclusions = new Set([
-    "ORIGINAL",
-    "GENERICA",
-    "GENÉRICA",
-    "GENERICO",
-    "GENÉRICO",
-    "BARATA",
-    "BARATO",
-    "ECONOMICA",
-    "ECONÓMICA",
-    "ECONOMICO",
-    "ECONÓMICO",
-  ]);
-
-  for (const pattern of patterns) {
-    let match;
-
-    while ((match = pattern.exec(text)) !== null) {
-      const value = normalizeText(match[1]);
-
-      if (
-        value &&
-        value.length >= 3 &&
-        !STOP_WORDS.has(value) &&
-        !ignoredExclusions.has(value)
-      ) {
-        excluded.push(value);
-      }
-    }
-  }
-
-  return unique(excluded).slice(0, 6);
-}
-
-function isExcludedValue(value, excludedTokens = []) {
-  const cleanValue = normalizeText(value);
-
-  if (!cleanValue) return false;
-
-  return excludedTokens.some((excluded) => {
-    const cleanExcluded = normalizeText(excluded);
-
-    return (
-      cleanValue === cleanExcluded ||
-      cleanValue.includes(cleanExcluded) ||
-      cleanExcluded.includes(cleanValue)
-    );
-  });
-}
-
-function hasComparisonIntent(question) {
-  const text = normalizeText(question);
-
-  return COMPARISON_PATTERNS.some((pattern) => pattern.test(text));
-}
-
-function asksForBranchStock(question) {
-  const text = normalizeText(question);
-
-  const hasBranch = STOCK_BRANCH_PATTERNS.some((pattern) => pattern.test(text));
-  const hasStockIntent = STOCK_INTENT_PATTERNS.some((pattern) => pattern.test(text));
-
-  return hasBranch && hasStockIntent;
-}
-
-function hasVehicleOnlyIntent(question, intent) {
-  const text = normalizeText(question);
-
-  const hasVehicle =
-    Boolean(intent.marca_auto) ||
-    Boolean(intent.modelo_auto) ||
-    Boolean(intent.anio) ||
-    Boolean(intent.motor);
-
-  const hasCode = intent.numero_parte_tokens.length > 0;
-  const hasProductTerm = intent.terminos_producto_detectados.length > 0;
-  const hasSearchableSymptom = intent.sintomas_detectados.some((item) => item.searchable);
-
-  if (!hasVehicle || hasCode || hasProductTerm || hasSearchableSymptom) {
-    return false;
-  }
-
-  return VEHICLE_ONLY_PATTERNS.some((pattern) => pattern.test(text)) || hasVehicle;
-}
-
-function detectVehicleAlias(question) {
-  const text = ` ${normalizeText(question)} `;
-
-  if (/\bGM\b/.test(text) || /\bGMC\b/.test(text) || /\bGENERAL MOTORS\b/.test(text)) {
-    return {
-      marca: "CHEVROLET",
-      modelo: null,
-      alias_detectado: "GM",
-    };
-  }
-
-  return null;
-}
-
-async function detectVehicleFromDb(question, excludedTokens = []) {
-  const normalizedQuestion = ` ${normalizeSearchQuery(question)} `;
-  const vehicleAlias = detectVehicleAlias(question);
-
-  if (vehicleAlias) {
-    return {
-      marca: vehicleAlias.marca,
-      modelo: vehicleAlias.modelo,
-    };
-  }
-  const tokens = getSearchTokens(question)
-    .map((token) => normalizeText(token))
-    .filter((token) => token.length >= MIN_FUZZY_TOKEN_LENGTH)
-    .filter((token) => !STOP_WORDS.has(token))
-    .filter((token) => !isExcludedValue(token, excludedTokens));
-
-  const [marcas] = await pool.query(
-    `
-    SELECT DISTINCT marca_auto
-    FROM producto_aplicaciones
-    WHERE marca_auto IS NOT NULL AND TRIM(marca_auto) <> ''
-    ORDER BY LENGTH(marca_auto) DESC
-    LIMIT 300
-    `
-  );
-
-  const marcaList = marcas
-    .map((row) => row.marca_auto)
-    .filter((marca) => !isExcludedValue(marca, excludedTokens));
-
-  let marca =
-    marcas.find((row) => {
-      if (isExcludedValue(row.marca_auto, excludedTokens)) return false;
-
-      const value = normalizeSearchQuery(row.marca_auto);
-      return value && normalizedQuestion.includes(` ${value} `);
-    })?.marca_auto || null;
-
-  if (!marca) {
-    for (const token of tokens) {
-      const found = safeFuzzyFind(token, marcaList, 1);
-
-      if (found && !isExcludedValue(found, excludedTokens)) {
-        marca = found;
-        break;
-      }
-    }
-  }
-
-  const [modelos] = await pool.query(
-    `
-    SELECT DISTINCT modelo_auto
-    FROM producto_aplicaciones
-    WHERE modelo_auto IS NOT NULL AND TRIM(modelo_auto) <> ''
-    ORDER BY LENGTH(modelo_auto) DESC
-    LIMIT 800
-    `
-  );
-
-  const modeloList = modelos
-    .map((row) => row.modelo_auto)
-    .filter((modelo) => !isExcludedValue(modelo, excludedTokens));
-
-  let modelo =
-    modelos.find((row) => {
-      if (isExcludedValue(row.modelo_auto, excludedTokens)) return false;
-
-      const value = normalizeSearchQuery(row.modelo_auto);
-      return value && normalizedQuestion.includes(` ${value} `);
-    })?.modelo_auto || null;
-
-  if (!modelo) {
-    for (const token of tokens) {
-      const found = safeFuzzyFind(token, modeloList, 1);
-
-      if (found && !isExcludedValue(found, excludedTokens)) {
-        modelo = found;
-        break;
-      }
-    }
-  }
-
-  return { marca, modelo };
-}
-
-function hasNonCatalogIntent(question) {
-  const text = normalizeText(question);
-
-  return NON_CATALOG_PATTERNS.some((pattern) => pattern.test(text));
-}
-
-function detectDirectProductTerms(question) {
-  const text = normalizeText(question);
-
-  return DIRECT_PRODUCT_TERMS.filter((term) => {
-    const normalizedTerm = normalizeText(term);
-    return text.includes(normalizedTerm);
-  });
-}
-
-function detectSymptomRules(question) {
-  const text = normalizeText(question);
-  const negatedOverheat = hasNegatedOverheat(question);
-
-  return SYMPTOM_RULES.filter((rule) => {
-    if (rule.key === "COOLING_OVERHEAT" && negatedOverheat) {
-      return false;
-    }
-
-    return rule.patterns.some((pattern) => pattern.test(text));
-  });
-}
-
-function hasUncertainLanguage(question) {
-  const text = normalizeText(question);
-
-  return UNCERTAIN_PATTERNS.some((pattern) => pattern.test(text));
-}
-
-function hasGenericProductWithoutVehicle({ intent, directProductTerms }) {
-  const hasVehicle =
-    Boolean(intent.marca_auto) ||
-    Boolean(intent.modelo_auto) ||
-    Boolean(intent.anio) ||
-    Boolean(intent.motor);
-
-  const hasCode = intent.numero_parte_tokens.length > 0;
-
-  if (hasVehicle || hasCode) return false;
-
-  return directProductTerms.some((term) =>
-    GENERIC_PRODUCT_TERMS_REQUIRE_VEHICLE.has(normalizeText(term))
-  );
-}
-function hasVehicleData(intent) {
-  return Boolean(
-    intent.marca_auto ||
-    intent.modelo_auto ||
-    intent.anio ||
-    intent.motor
-  );
-}
-
-function hasCodeData(intent) {
-  return Array.isArray(intent.numero_parte_tokens) && intent.numero_parte_tokens.length > 0;
-}
-
-function hasSearchableSymptom(intent) {
-  return Array.isArray(intent.sintomas_detectados)
-    ? intent.sintomas_detectados.some((item) => item.searchable)
-    : false;
-}
-
-function shouldAllowExploratorySearch({ intent, directProductTerms, uncertainLanguage }) {
-  const hasVehicle = hasVehicleData(intent);
-  const hasCode = hasCodeData(intent);
-  const hasDirectProduct = directProductTerms.length > 0;
-
-  if (hasVehicle || hasCode) return false;
-
-  // Si el cliente está dudando o describiendo una falla incierta, mejor pedir datos.
-  if (uncertainLanguage) return false;
-
-  // Si escribió una pieza/familia clara, dejamos explorar catálogo.
-  return hasDirectProduct;
-}
-
-function hasExplicitProductSearchIntent(question) {
-  const text = normalizeText(question);
-
-  return (
-    /\bBUSCO\b/.test(text) ||
-    /\bBUSCAR\b/.test(text) ||
-    /\bNECESITO\b/.test(text) ||
-    /\bOCUPO\b/.test(text) ||
-    /\bQUIERO\b/.test(text) ||
-    /\bCOTIZAR\b/.test(text) ||
-    /\bTIENES\b/.test(text) ||
-    /\bTENDRAS\b/.test(text) ||
-    /\bTENDRÁS\b/.test(text) ||
-    /\bMANEJAS\b/.test(text) ||
-    /\bVENDES\b/.test(text) ||
-    /\bCODIGO\b/.test(text) ||
-    /\bCÓDIGO\b/.test(text)
-  );
-}
-
-function hasDiagnosticLanguage(question) {
-  const text = normalizeText(question);
-
-  return (
-    /\bMI\s+(AUTO|CARRO|COCHE|VEHICULO|VEHÍCULO)\b/.test(text) ||
-    /\bSE\s+CALIENTA\b/.test(text) ||
-    /\bTIRA\b/.test(text) ||
-    /\bPIERDE\b/.test(text) ||
-    /\bGOTEA\b/.test(text) ||
-    /\bHACE\s+RUIDO\b/.test(text) ||
-    /\bSUENA\b/.test(text) ||
-    /\bQUE\s+PUEDE\s+SER\b/.test(text) ||
-    /\bQUÉ\s+PUEDE\s+SER\b/.test(text) ||
-    /\bQUE\s+SERA\b/.test(text) ||
-    /\bQUÉ\s+SERÁ\b/.test(text)
-  );
-}
-
-function hasVagueCoolingFluidDescription(question) {
-  const text = normalizeText(question);
-
-  return (
-    /\bLIQUIDO\b/.test(text) ||
-    /\bLÍQUIDO\b/.test(text) ||
-    /\bANTICONGELANTE\b/.test(text) ||
-    /\bDONDE\s+LE\s+PONGO\b/.test(text) ||
-    /\bDEPOSITO\b/.test(text) ||
-    /\bDEPÓSITO\b/.test(text)
-  ) && (
-      /\bTIRA\b/.test(text) ||
-      /\bPIERDE\b/.test(text) ||
-      /\bFUGA\b/.test(text) ||
-      /\bGOTEA\b/.test(text)
-    );
-}
-
-function hasSingleLetterVehicleHint(question) {
-  const text = normalizeText(question);
-
-  return /\bPARA\s+UN\s+[A-Z]\b/.test(text) || /\bPARA\s+UNA\s+[A-Z]\b/.test(text);
-}
-
-function buildIntentGate({ question, intent }) {
-  const directProductTerms = detectDirectProductTerms(question);
-  const symptomRules = detectSymptomRules(question);
-  const uncertainLanguage = hasUncertainLanguage(question);
-  const genericProductWithoutVehicle = hasGenericProductWithoutVehicle({
-    intent,
-    directProductTerms,
-  });
-  const allowExploratorySearch = shouldAllowExploratorySearch({
-    intent,
-    directProductTerms,
-    uncertainLanguage,
-  });
-
-  const hasCode = intent.numero_parte_tokens.length > 0;
-  const hasVehicle =
-    Boolean(intent.marca_auto) ||
-    Boolean(intent.modelo_auto) ||
-    Boolean(intent.anio) ||
-    Boolean(intent.motor);
-
-  const searchableSymptoms = symptomRules.filter((rule) => rule.searchable);
-  const nonSearchableSymptoms = symptomRules.filter((rule) => !rule.searchable);
-
-  const explicitProductSearch = hasExplicitProductSearchIntent(question);
-  const diagnosticLanguage = hasDiagnosticLanguage(question);
-
-  if (
-    searchableSymptoms.length > 0 &&
-    !hasVehicle &&
-    !hasCode &&
-    diagnosticLanguage &&
-    !explicitProductSearch
-  ) {
-    return {
-      allowed: false,
-      reason: "DIAGNOSTIC_SYMPTOM_WITHOUT_VEHICLE",
-      message:
-        "Con ese síntoma no conviene recomendar una pieza exacta todavía. Para ayudarte mejor dime marca, modelo, año y motor del vehículo. También ayuda saber si hay fuga, si sube la temperatura, si prende el ventilador o si pierde anticongelante.",
-      symptomRules,
-      directProductTerms,
-    };
-  }
-
-  if (
-    hasVagueCoolingFluidDescription(question) &&
-    !hasVehicle &&
-    !hasCode &&
-    diagnosticLanguage
-  ) {
-    return {
-      allowed: false,
-      reason: "VAGUE_COOLING_FLUID_WITHOUT_VEHICLE",
-      message:
-        "Por lo que describes, puede estar relacionado con el depósito de anticongelante, tapón, manguera, radiador o alguna fuga del sistema de enfriamiento. Para buscar una pieza correcta necesito marca, modelo, año y motor del vehículo.",
-      symptomRules,
-      directProductTerms,
-    };
-  }
-
-  if (hasNonCatalogIntent(question) && !hasCode && !directProductTerms.length && !hasVehicle) {
-    return {
-      allowed: false,
-      reason: "OUT_OF_CATALOG_SCOPE",
-      message:
-        "Solo puedo ayudarte a buscar refacciones dentro del catálogo Andyfers. Escribe la pieza, código, marca, modelo, año o motor del vehículo.",
-      symptomRules,
-      directProductTerms,
-    };
-  }
-
-  if (genericProductWithoutVehicle && uncertainLanguage) {
-    return {
-      allowed: false,
-      reason: "GENERIC_UNCERTAIN_PART_WITHOUT_VEHICLE",
-      message:
-        "Por lo que describes, podría tratarse de una pieza del sistema de enfriamiento, pero todavía no puedo recomendar un producto exacto. Para buscar correctamente necesito marca, modelo, año y motor del vehículo. Si puedes, también indica si el líquido es anticongelante.",
-      symptomRules,
-      directProductTerms,
-    };
-  }
-
-  if (genericProductWithoutVehicle && allowExploratorySearch) {
-    return {
-      allowed: true,
-      reason: intent.has_negation
-        ? "EXPLORATORY_PRODUCT_SEARCH_WITH_EXCLUSION"
-        : "EXPLORATORY_PRODUCT_SEARCH",
-      mode: "EXPLORATORY",
-      message: null,
-      symptomRules,
-      directProductTerms,
-    };
-  }
-
-  if (genericProductWithoutVehicle && uncertainLanguage) {
-    return {
-      allowed: false,
-      reason: "GENERIC_UNCERTAIN_PART_WITHOUT_VEHICLE",
-      message:
-        "Por lo que describes, podría tratarse de una pieza del sistema de enfriamiento, pero todavía no puedo recomendar un producto exacto. Para buscar correctamente necesito marca, modelo, año y motor del vehículo. Si puedes, también indica si el líquido es anticongelante o sube una foto de la pieza.",
-      symptomRules,
-      directProductTerms,
-    };
-  }
-
-  if (
-    nonSearchableSymptoms.length > 0 &&
-    searchableSymptoms.length === 0 &&
-    directProductTerms.length === 0 &&
-    !hasCode
-  ) {
-    return {
-      allowed: false,
-      reason: "TOO_BROAD_SYMPTOM",
-      message:
-        "La falla que describes es muy general. Para ayudarte mejor, dime qué pieza buscas o agrega más datos: marca, modelo, año, motor, sistema afectado o número de parte.",
-      symptomRules,
-      directProductTerms,
-    };
-  }
-
-  const hasConditionWarnings =
-    Array.isArray(intent.condiciones_detectadas) &&
-    intent.condiciones_detectadas.length > 0;
-
-  if (!hasCode && !hasVehicle && !directProductTerms.length && hasConditionWarnings) {
-    return {
-      allowed: false,
-      reason: "DIAGNOSTIC_WITHOUT_PART_OR_VEHICLE",
-      message:
-        "Con ese síntoma no conviene recomendar una pieza exacta todavía. Puede estar relacionado con el sistema de enfriamiento, tapón, depósito, radiador, circulación de anticongelante o incluso aire en el sistema. Dime marca, modelo, año, motor y si hay fuga o pérdida de anticongelante para ayudarte mejor.",
-      symptomRules,
-      directProductTerms,
-    };
-  }
-
-  if (hasSingleLetterVehicleHint(question) && !intent.modelo_auto && !intent.marca_auto) {
-    return {
-      allowed: false,
-      reason: "AMBIGUOUS_SINGLE_LETTER_VEHICLE",
-      message:
-        "Con solo una letra no puedo identificar el vehículo. Dime la marca y modelo completos, por ejemplo Chevrolet Chevy, GMC, Mazda 3, Gol, Golf, etc.",
-      symptomRules,
-      directProductTerms,
-    };
-  }
-
-  if (!hasCode && !hasVehicle && !directProductTerms.length && !searchableSymptoms.length) {
-    return {
-      allowed: false,
-      reason: "LOW_CATALOG_INTENT",
-      message:
-        "No detecté una búsqueda clara de refacción. Escribe la pieza, código, marca, modelo, año o motor para buscar dentro del catálogo Andyfers.",
-      symptomRules,
-      directProductTerms,
-    };
-  }
-
-  if (hasVehicleOnlyIntent(question, intent)) {
-    return {
-      allowed: false,
-      reason: "VEHICLE_WITHOUT_PART",
-      message:
-        "Detecté datos del vehículo, pero todavía falta saber qué pieza necesitas. Dime la refacción, sistema o síntoma para buscar correctamente en el catálogo Andyfers.",
-      symptomRules,
-      directProductTerms,
-    };
-  }
-
+  asksForBranchStock,
+  asksForFutureStock,
+  buildIntent,
+  buildIntentGate,
+  shouldUseSemanticIntentNormalizer,
+  applySemanticIntentToLocalIntent,
+} from "./catalog-ai/catalogIntent.service.js";
+import {
+  searchCandidates,
+  getCandidateDetails,
+} from "./catalog-ai/catalogSearch.service.js";
+import {
+  scoreCandidate,
+  formatCandidate,
+  compareCandidatesByIntent,
+  productMatchesExcluded,
+} from "./catalog-ai/catalogScoring.service.js";
+import {
+  buildLocalAnswer,
+  buildAiMessages,
+} from "./catalog-ai/catalogResponse.service.js";
+import {
+  buildAdvisorAiMessages,
+  buildAdvisorLocalAnswer,
+} from "./catalog-ai/catalogAdvisorResponse.service.js";
+import {
+  CATALOG_CONVERSATION_MODES,
+  routeCatalogConversation,
+} from "./catalog-ai/catalogConversationRouter.service.js";
+import { logAiSearch } from "./catalog-ai/catalogLog.service.js";
+import { shouldIgnoreSessionContextForQuestion } from "./catalog-ai/catalogSessionRules.service.js";
+import {
+  buildProductComparisonEvidence,
+  buildProductComparisonLocalAnswer,
+} from "./catalog-ai/catalogProductComparison.service.js";
+import {
+  buildCompatibilityEvidence,
+  buildCompatibilityExplanationLocalAnswer,
+} from "./catalog-ai/catalogCompatibility.service.js";
+
+function buildEmptyResult({ intent, sessionId, context, answer, service, requiresMoreData = true }) {
   return {
-    allowed: true,
-    reason: "CATALOG_SEARCH",
-    message: null,
-    symptomRules,
-    directProductTerms,
+    intencion: intent,
+    session_id: sessionId,
+    contexto_corto: context || {},
+    respuesta: answer,
+    servicio_ia: service,
+    total_candidatos: 0,
+    total_recomendados: 0,
+    productos: [],
+    requiere_mas_datos: requiresMoreData,
   };
 }
 
-function detectCommercialPreferences(question) {
-  const text = normalizeText(question);
-
-  return {
-    economica:
-      /\bMAS\s+BARATA\b/.test(text) ||
-      /\bMÁS\s+BARATA\b/.test(text) ||
-      /\bBARATA\b/.test(text) ||
-      /\bBARATO\b/.test(text) ||
-      /\bECONOMICA\b/.test(text) ||
-      /\bECONÓMICA\b/.test(text) ||
-      /\bECONOMICO\b/.test(text) ||
-      /\bECONÓMICO\b/.test(text),
-    no_original:
-      /\bNO\s+LA\s+ORIGINAL\b/.test(text) ||
-      /\bNO\s+ORIGINAL\b/.test(text) ||
-      /\bGENERICA\b/.test(text) ||
-      /\bGENÉRICA\b/.test(text) ||
-      /\bGENERICO\b/.test(text) ||
-      /\bGENÉRICO\b/.test(text),
-  };
-}
-
-function detectConditionWarnings(question) {
-  const text = normalizeText(question);
-  const warnings = [];
-
-  if (
-    /\bLLUEVE\b/.test(text) ||
-    /\bLLUVIA\b/.test(text) ||
-    /\bMOJA\b/.test(text) ||
-    /\bMOJADO\b/.test(text)
-  ) {
-    warnings.push({
-      key: "RAIN_CONDITION",
-      label:
-        "La falla aparece con lluvia o humedad; también podría relacionarse con conexiones eléctricas, sensores o humedad en componentes.",
-    });
-  }
-
-  if (
-    /\bCON\s+CLIMA\b/.test(text) ||
-    /\bUSO\s+EL\s+CLIMA\b/.test(text) ||
-    /\bPRENDO\s+EL\s+CLIMA\b/.test(text) ||
-    /\bAIRE\s+ACONDICIONADO\b/.test(text)
-  ) {
-    warnings.push({
-      key: "AC_CONDITION",
-      label:
-        "La falla aparece al usar el clima; puede aumentar la carga del motor o del sistema de enfriamiento.",
-    });
-  }
-
-  if (
-    /\bNO\s+SE\s+CALIENTA\b/.test(text) ||
-    /\bNO\s+CALIENTA\b/.test(text)
-  ) {
-    warnings.push({
-      key: "NEGATED_OVERHEAT",
-      label:
-        "El cliente indica que no se calienta; no conviene asumir sobrecalentamiento como causa principal.",
-    });
-  }
-
-  return warnings;
-}
-
-function asksForFutureStock(question) {
-  const text = normalizeText(question);
-
-  return (
-    /\bCUANDO\b.*\bTENER\b.*\bSTOCK\b/.test(text) ||
-    /\bCUÁNDO\b.*\bTENER\b.*\bSTOCK\b/.test(text) ||
-    /\bCUANDO\b.*\bLLEGA\b/.test(text) ||
-    /\bCUÁNDO\b.*\bLLEGA\b/.test(text) ||
-    /\bPROXIMA\s+SEMANA\b/.test(text) ||
-    /\bPRÓXIMA\s+SEMANA\b/.test(text) ||
-    /\bREABASTECER\b/.test(text) ||
-    /\bREABASTECIMIENTO\b/.test(text)
-  );
-}
-
-function extractMotorCandidates(question) {
-  const text = normalizeText(question);
-
-  const decimalMatches = text.match(/\b[0-9]{1}\.[0-9]\b/g) || [];
-  const ccMatches = text.match(/\b[0-9]{3,4}\s*CC\b/g) || [];
-
-  return unique([...decimalMatches, ...ccMatches.map((item) => item.replace(/\s+/g, " "))]);
-}
-
-function hasAmbiguousMotor(question) {
-  const text = normalizeText(question);
-  const candidates = extractMotorCandidates(question);
-
-  return (
-    candidates.length > 1 ||
-    /\bNO\s+SE\s+SI\b.*\bMOTOR\b/.test(text) ||
-    /\bNO\s+SÉ\s+SI\b.*\bMOTOR\b/.test(text) ||
-    /\bNO\s+SE\s+SI\s+ES\b/.test(text) ||
-    /\bNO\s+SÉ\s+SI\s+ES\b/.test(text)
-  );
-}
-
-function hasNegatedOverheat(question) {
-  const text = normalizeText(question);
-
-  return (
-    /\bNO\s+SE\s+CALIENTA\b/.test(text) ||
-    /\bNO\s+CALIENTA\b/.test(text)
-  );
-}
-
-function buildProductQueryTokens({
-  directProductTerms = [],
-  expansionTokens = [],
-  symptomTokens = [],
-  synonyms = [],
-}) {
-  const synonymProductTokens = synonyms
-    .filter((item) => ["FAMILIA", "CATEGORIA", "CATEGORÍA", "PRODUCTO"].includes(normalizeText(item.tipo)))
-    .flatMap((item) => [
-      ...normalizeSearchQuery(item.texto_usuario).split(" "),
-      ...normalizeSearchQuery(item.texto_normalizado).split(" "),
-      item.texto_usuario,
-      item.texto_normalizado,
-    ]);
-
-  return unique([
-    ...directProductTerms,
-    ...expansionTokens,
-    ...symptomTokens,
-    ...synonymProductTokens,
-  ])
-    .map((token) => normalizeText(token))
-    .filter(Boolean)
-    .filter((token) => token.length >= 2)
-    .filter((token) => !STOP_WORDS.has(token))
-    .slice(0, 24);
-}
-
-function detectStrictProductFamilyTokens({ directProductTerms = [], expansionTokens = [] }) {
-  const text = normalizeText([...directProductTerms, ...expansionTokens].join(" "));
-
-  if (
-    text.includes("WATER PUMP") ||
-    text.includes("BOMBA DE AGUA") ||
-    text.includes("BOMBA AGUA")
-  ) {
-    return ["BOMBA", "BOMBAS", "BOMBA DE AGUA", "BOMBAS DE AGUA"];
-  }
-
-  if (
-    text.includes("EMPAQUE DE CABEZA") ||
-    text.includes("EMPAQUE CABEZA") ||
-    text.includes("JUNTA DE CABEZA") ||
-    text.includes("JUNTA CABEZA") ||
-    text.includes("JUNTA DE CULATA") ||
-    text.includes("JUNTA CULATA")
-  ) {
-    return [
-      "EMPAQUE",
-      "EMPAQUE CABEZA",
-      "EMPAQUE DE CABEZA",
-      "JUNTA CABEZA",
-      "JUNTA DE CABEZA",
-      "JUNTA CULATA",
-      "JUNTA DE CULATA",
-    ];
-  }
-
-  if (
-    text.includes("PASTILLAS DE FRENO") ||
-    text.includes("PASTILLAS FRENO") ||
-    text.includes("BALATAS")
-  ) {
-    return ["PASTILLAS", "PASTILLAS DE FRENO", "PASTILLAS FRENO", "BALATAS", "FRENOS"];
-  }
-
-  if (
-    text.includes("TAPON RADIADOR") ||
-    text.includes("TAPON DEPOSITO") ||
-    text.includes("TAPÓN RADIADOR") ||
-    text.includes("TAPÓN DEPOSITO")
-  ) {
-    return ["TAPON", "TAPÓN", "TAPON RADIADOR", "TAPON DEPOSITO", "TAPÓN RADIADOR"];
-  }
-
-  return [];
-}
-
-const SEMANTIC_PRODUCT_MAP = {
-  "BOMBA": {
-    direct: ["BOMBA DE AGUA"],
-    product: ["BOMBA", "BOMBA AGUA", "BOMBA DE AGUA", "BOMBAS DE AGUA"],
-    strict: ["BOMBA", "BOMBAS", "BOMBA DE AGUA", "BOMBAS DE AGUA"],
-  },
-  "BOMBA DE AGUA": {
-    direct: ["BOMBA DE AGUA"],
-    product: ["BOMBA", "BOMBA AGUA", "BOMBA DE AGUA", "BOMBAS DE AGUA"],
-    strict: ["BOMBA", "BOMBAS", "BOMBA DE AGUA", "BOMBAS DE AGUA"],
-  },
-  "TERMOSTATO": {
-    direct: ["TERMOSTATO"],
-    product: ["TERMOSTATO", "TERMOSTATOS"],
-    strict: ["TERMOSTATO", "TERMOSTATOS"],
-  },
-  "RADIADOR": {
-    direct: ["RADIADOR"],
-    product: ["RADIADOR", "RADIADORES"],
-    strict: ["RADIADOR", "RADIADORES"],
-  },
-  "MANGUERA": {
-    direct: ["MANGUERA"],
-    product: ["MANGUERA", "MANGUERAS"],
-    strict: ["MANGUERA", "MANGUERAS"],
-  },
-  "TAPON": {
-    direct: ["TAPON", "TAPÓN"],
-    product: ["TAPON", "TAPÓN", "TAPON RADIADOR", "TAPON DEPOSITO"],
-    strict: ["TAPON", "TAPÓN"],
-  },
-  "SENSOR": {
-    direct: ["SENSOR"],
-    product: ["SENSOR", "BULBO", "SENSOR TEMPERATURA"],
-    strict: ["SENSOR", "BULBO"],
-  },
-  "EMPAQUE DE CABEZA": {
-    direct: ["EMPAQUE DE CABEZA", "JUNTA DE CABEZA", "JUNTA DE CULATA"],
-    product: [
-      "EMPAQUE",
-      "EMPAQUE CABEZA",
-      "EMPAQUE DE CABEZA",
-      "JUNTA CABEZA",
-      "JUNTA DE CABEZA",
-      "JUNTA CULATA",
-      "JUNTA DE CULATA",
-    ],
-    strict: [
-      "EMPAQUE",
-      "EMPAQUE CABEZA",
-      "EMPAQUE DE CABEZA",
-      "JUNTA CABEZA",
-      "JUNTA DE CABEZA",
-      "JUNTA CULATA",
-      "JUNTA DE CULATA",
-    ],
-  },
-};
-
-function hasSemanticNegationLanguage(question) {
-  const text = normalizeText(question);
-
-  return (
-    /\bNO\s+SEA\b/.test(text) ||
-    /\bOTRA\s+MARCA\b/.test(text) ||
-    /\bDISTINT[AO]\b/.test(text) ||
-    /\bDIFERENTE\b/.test(text) ||
-    /\bEXCEPTO\b/.test(text) ||
-    /\bALTERNATIV[AO]\b/.test(text) ||
-    /\bNO\s+PERTENEZCA\b/.test(text) ||
-    /\bNO\s+PROVENGA\b/.test(text) ||
-    /\bNO\s+EST[ÉE]\s+ASOCIAD[AO]\b/.test(text) ||
-    /\bNO\s+SEA\s+PRODUCID[AO]\b/.test(text) ||
-    /\bFABRICAD[AO]\s+POR\s+UNA\s+MARCA\s+DIFERENTE\b/.test(text) ||
-    /\bNOT\s+FOR\b/.test(text)
-  );
-}
-
-function shouldUseSemanticIntentNormalizer(question, localIntent) {
-  const rawEnabled = process.env.AI_INTENT_NORMALIZER_ENABLED;
-
-  const enabled =
-    rawEnabled === undefined
-      ? true
-      : ["1", "true", "yes", "on", "si", "sí"].includes(
-        String(rawEnabled).toLowerCase()
-      );
-
-  if (!enabled) return false;
-
-  const hasLocalExclusions =
-    Array.isArray(localIntent.excluded_tokens) &&
-    localIntent.excluded_tokens.length > 0;
-
-  if (hasSemanticNegationLanguage(question)) {
-    return true;
-  }
-
-  const hasProduct =
-    Array.isArray(localIntent.terminos_producto_detectados) &&
-    localIntent.terminos_producto_detectados.length > 0;
-
-  const hasCode =
-    Array.isArray(localIntent.numero_parte_tokens) &&
-    localIntent.numero_parte_tokens.length > 0;
-
-  const hasVehicle =
-    Boolean(localIntent.marca_auto) ||
-    Boolean(localIntent.modelo_auto) ||
-    Boolean(localIntent.anio) ||
-    Boolean(localIntent.motor);
-
-  const hasWeakIntent = !hasProduct && !hasCode && !hasVehicle;
-
-  if (hasWeakIntent && String(question).length > 20) {
-    return true;
-  }
-
-  return false;
-}
-
-function normalizeSemanticList(values = []) {
-  return unique(
-    values
-      .map((item) => normalizeText(item))
-      .filter(Boolean)
-      .filter((item) => item.length >= 2)
-  );
-}
-
-function applySemanticIntentToLocalIntent(localIntent, semanticIntent) {
-  if (!semanticIntent) return localIntent;
-
-  const pieza = normalizeText(semanticIntent.pieza_normalizada);
-  const productMap = SEMANTIC_PRODUCT_MAP[pieza] || null;
-
-  const legacySemanticExclusions = normalizeSemanticList(semanticIntent.exclusiones);
-  const semanticVehicleExclusions = normalizeSemanticList(
-    semanticIntent.exclusiones_vehiculo
-  );
-  const semanticProductBrandExclusions = normalizeSemanticList(
-    semanticIntent.exclusiones_marca_producto
-  );
-
-  const currentVehicleExclusions = normalizeSemanticList(
-    localIntent.excluded_vehicle_tokens || localIntent.excluded_tokens || []
-  );
-
-  const currentProductBrandExclusions = normalizeSemanticList(
-    localIntent.excluded_product_brand_tokens || []
-  );
-
-  const excludedVehicleTokens = unique([
-    ...currentVehicleExclusions,
-    ...semanticVehicleExclusions,
-  ]);
-
-  const excludedProductBrandTokens = unique([
-    ...currentProductBrandExclusions,
-    ...semanticProductBrandExclusions,
-  ]);
-
-  /**
-   * Compatibilidad legacy:
-   * Si la IA vieja todavía manda "exclusiones" plano, las usamos como vehículo
-   * solo cuando no se pudo clasificar nada nuevo.
-   */
-  const fallbackVehicleTokens =
-    excludedVehicleTokens.length || excludedProductBrandTokens.length
-      ? excludedVehicleTokens
-      : legacySemanticExclusions;
-
-  const next = {
-    ...localIntent,
-    excluded_tokens: fallbackVehicleTokens,
-    excluded_vehicle_tokens: fallbackVehicleTokens,
-    excluded_product_brand_tokens: excludedProductBrandTokens,
-    has_negation:
-      fallbackVehicleTokens.length > 0 ||
-      excludedProductBrandTokens.length > 0 ||
-      Boolean(localIntent.has_negation),
-    normalizador_ia: semanticIntent,
-    normalizador_ia_aplicado: true,
-  };
-
-  if (productMap) {
-    next.terminos_producto_detectados = unique([
-      ...(localIntent.terminos_producto_detectados || []),
-      ...productMap.direct,
-    ]);
-
-    next.product_query_tokens = unique([
-      ...(localIntent.product_query_tokens || []),
-      ...productMap.product,
-    ]);
-
-    next.strict_product_family_tokens = unique([
-      ...(localIntent.strict_product_family_tokens || []),
-      ...productMap.strict,
-    ]);
-
-    next.tokens = unique([
-      ...(localIntent.tokens || []),
-      ...productMap.product,
-    ])
-      .map((token) => normalizeText(token))
-      .filter((token) => !STOP_WORDS.has(token));
-  }
-
-  const preferencias = semanticIntent.preferencias || {};
-  next.preferencias_comerciales = {
-    ...(localIntent.preferencias_comerciales || {}),
-    economica:
-      Boolean(localIntent.preferencias_comerciales?.economica) ||
-      Boolean(preferencias.economica),
-    no_original:
-      Boolean(localIntent.preferencias_comerciales?.no_original) ||
-      Boolean(preferencias.no_original),
-    otra_marca:
-      Boolean(localIntent.preferencias_comerciales?.otra_marca) ||
-      Boolean(preferencias.otra_marca),
-  };
-
-  const vehiculo = semanticIntent.vehiculo || {};
-
-  if (!next.marca_auto && vehiculo.marca_auto) {
-    next.marca_auto = normalizeText(vehiculo.marca_auto);
-  }
-
-  if (!next.modelo_auto && vehiculo.modelo_auto) {
-    next.modelo_auto = normalizeText(vehiculo.modelo_auto);
-  }
-
-  if (!next.anio && vehiculo.anio) {
-    next.anio = vehiculo.anio;
-  }
-
-  if (!next.motor && vehiculo.motor) {
-    next.motor = normalizeText(vehiculo.motor);
-  }
-
-  return next;
-}
-
-function classifyLocalExclusionsByScope(question, exclusions = []) {
-  const text = normalizeText(question);
-  const cleanExclusions = normalizeSemanticList(exclusions);
-
-  const productBrandLanguage =
-    /\bMARCA\s+DIFERENTE\b/.test(text) ||
-    /\bOTRA\s+MARCA\b/.test(text) ||
-    /\bDISTINT[AO]\s+A\b/.test(text) ||
-    /\bFABRICAD[AO]\b/.test(text) ||
-    /\bPRODUCID[AO]\b/.test(text) ||
-    /\bPROVENGA\b/.test(text) ||
-    /\bORIGINAL\b/.test(text) ||
-    /\bOEM\b/.test(text);
-
-  const vehicleApplicationLanguage =
-    /\bPARA\b/.test(text) ||
-    /\bCOMPATIBLE\b/.test(text) ||
-    /\bLE\s+QUEDE\b/.test(text) ||
-    /\bLE\s+SIRVA\b/.test(text) ||
-    /\bAPLIQUE\b/.test(text) ||
-    /\bAPLICACION\b/.test(text) ||
-    /\bAPLICACIÓN\b/.test(text) ||
-    /\bNOT\s+FOR\b/.test(text);
-
-  if (productBrandLanguage && !vehicleApplicationLanguage) {
-    return {
-      vehicle: [],
-      productBrand: cleanExclusions,
-    };
-  }
-
-  return {
-    vehicle: cleanExclusions,
-    productBrand: [],
-  };
-}
-
-async function buildIntent(question) {
-  const normalizedQuestion = normalizeSearchQuery(question);
-  const excludedTokens = extractExcludedTerms(question);
-  const localExclusionScope = classifyLocalExclusionsByScope(
-    question,
-    excludedTokens
-  );
-  const commercialPreferences = detectCommercialPreferences(question);
-  const conditionWarnings = detectConditionWarnings(question);
-  const measurementFilters = detectMeasurementFilters(question);
-  const motorCandidates = extractMotorCandidates(question);
-  const motorAmbiguo = hasAmbiguousMotor(question);
-  const synonyms = await getMatchingSynonyms(normalizedQuestion, excludedTokens);
-  const vehicle = await detectVehicleFromDb(question, excludedTokens);
-
-  const synonymTokens = synonyms.flatMap((item) => [
-    ...normalizeSearchQuery(item.texto_usuario).split(" "),
-    ...normalizeSearchQuery(item.texto_normalizado).split(" "),
-  ]);
-
-  const symptomRules = detectSymptomRules(question);
-  const symptomTokens = symptomRules
-    .filter((rule) => rule.searchable)
-    .flatMap((rule) => rule.tokens);
-
-  const directProductTerms = detectDirectProductTerms(question);
-  const expansionTokens = getExpansionTokens(question);
-  const productQueryTokens = buildProductQueryTokens({
-    directProductTerms,
-    expansionTokens,
-    symptomTokens,
-    synonyms,
-  });
-  const strictProductFamilyTokens = detectStrictProductFamilyTokens({
-    directProductTerms,
-    expansionTokens,
-  });
-
-  const tokens = unique([
-    ...extractPlainTokens(question),
-    ...synonymTokens.map((token) => token.trim()).filter(Boolean),
-    ...directProductTerms,
-    ...symptomTokens,
-    ...expansionTokens,
-  ])
-    .map((token) => normalizeText(token))
-    .filter((token) => token.length >= 2)
-    .filter((token) => !STOP_WORDS.has(token))
-    .filter((token) => !isExcludedValue(token, excludedTokens))
-    .slice(0, 32);
-
-  return {
-    pregunta_normalizada: normalizedQuestion,
-    anio: extractYear(question),
-    motor: extractMotor(question),
-    numero_parte_tokens: extractPartNumbers(question),
-    tokens,
-    excluded_tokens: localExclusionScope.vehicle,
-    excluded_vehicle_tokens: localExclusionScope.vehicle,
-    excluded_product_brand_tokens: localExclusionScope.productBrand,
-    has_negation:
-      localExclusionScope.vehicle.length > 0 ||
-      localExclusionScope.productBrand.length > 0,
-    sinonimos_detectados: synonyms,
-    expansiones_detectadas: expansionTokens,
-    sintomas_detectados: symptomRules.map((rule) => ({
-      key: rule.key,
-      label: rule.label,
-      searchable: rule.searchable,
-    })),
-    terminos_producto_detectados: directProductTerms,
-    marca_auto: vehicle.marca,
-    modelo_auto: vehicle.modelo,
-    preferencias_comerciales: commercialPreferences,
-    condiciones_detectadas: conditionWarnings,
-    medidas_detectadas: measurementFilters,
-    motores_posibles: motorCandidates,
-    motor_ambiguo: motorAmbiguo,
-    product_query_tokens: productQueryTokens,
-    strict_product_family_tokens: strictProductFamilyTokens,
-  };
-}
-
-function buildCandidateWhere(intent) {
-  const conditions = [
-    "p.activo = 1",
-    "p.activo_web = 1",
-    `
-    (
-      (p.codigo_andyfers IS NOT NULL AND TRIM(p.codigo_andyfers) <> '')
-      OR
-      (p.codigo_importacion IS NOT NULL AND TRIM(p.codigo_importacion) <> '')
-    )
-    `,
-  ];
-
-  const params = [];
-
-  const codeConditions = [];
-  const productConditions = [];
-  const vehicleConditions = [];
-
-  const hasCodes =
-    Array.isArray(intent.numero_parte_tokens) &&
-    intent.numero_parte_tokens.length > 0;
-
-  const productTokens = Array.isArray(intent.product_query_tokens)
-    ? intent.product_query_tokens
-    : [];
-  const strictProductFamilyTokens = Array.isArray(intent.strict_product_family_tokens)
-    ? intent.strict_product_family_tokens
-    : [];
-  const measurementFilters = Array.isArray(intent.medidas_detectadas)
-    ? intent.medidas_detectadas
-    : [];
-
-  /**
-   * 1) CÓDIGOS
-   * Si el usuario busca código, permitimos búsqueda directa por código/cruces.
-   */
-  for (const code of intent.numero_parte_tokens || []) {
-    codeConditions.push("p.codigo_andyfers_normalizado LIKE ?");
-    params.push(`%${code}%`);
-
-    codeConditions.push(
-      "REPLACE(REPLACE(REPLACE(UPPER(COALESCE(p.codigo_importacion, '')), '-', ''), '.', ''), ' ', '') LIKE ?"
-    );
-    params.push(`%${code}%`);
-
-    codeConditions.push("pc.numero_parte_normalizado LIKE ?");
-    params.push(`%${code}%`);
-  }
-
-  if (strictProductFamilyTokens.length > 0) {
-    for (const token of strictProductFamilyTokens) {
-      const like = `%${token}%`;
-
-      // Búsqueda fuerte: familia/categoría.
-      // Esto evita que "TUBO ... A BOMBA DE AGUA" gane como si fuera bomba.
-      productConditions.push("UPPER(COALESCE(p.familia, '')) LIKE ?");
-      params.push(like);
-
-      productConditions.push("UPPER(COALESCE(c.nombre, '')) LIKE ?");
-      params.push(like);
-    }
-  } else {
-    for (const token of productTokens) {
-      const like = `%${token}%`;
-
-      productConditions.push("UPPER(COALESCE(p.descripcion, '')) LIKE ?");
-      params.push(like);
-
-      productConditions.push("UPPER(COALESCE(p.descripcion_web, '')) LIKE ?");
-      params.push(like);
-
-      productConditions.push("UPPER(COALESCE(p.familia, '')) LIKE ?");
-      params.push(like);
-
-      productConditions.push("UPPER(COALESCE(c.nombre, '')) LIKE ?");
-      params.push(like);
-
-      productConditions.push("UPPER(COALESCE(pat.valor_texto, '')) LIKE ?");
-      params.push(like);
-    }
-  }
-
-  /**
-   * 3) VEHÍCULO
-   * Marca/modelo/año/motor se aplican como filtro adicional, no como OR general.
-   */
-  if (intent.marca_auto) {
-    vehicleConditions.push("UPPER(COALESCE(pa.marca_auto, '')) LIKE ?");
-    params.push(`%${normalizeText(intent.marca_auto)}%`);
-  }
-
-  if (intent.modelo_auto) {
-    vehicleConditions.push("UPPER(COALESCE(pa.modelo_auto, '')) LIKE ?");
-    params.push(`%${normalizeText(intent.modelo_auto)}%`);
-  }
-
-  if (intent.motor) {
-    vehicleConditions.push("UPPER(COALESCE(pa.motor, '')) LIKE ?");
-    params.push(`%${normalizeText(intent.motor)}%`);
-  }
-
-  if (intent.anio) {
-    vehicleConditions.push(
-      "(? BETWEEN COALESCE(pa.anio_inicio, ?) AND COALESCE(pa.anio_fin, ?))"
-    );
-    params.push(intent.anio, intent.anio, intent.anio);
-  }
-
-  for (const measurement of measurementFilters) {
-    const value = Number(measurement.valor_numero);
-    const tolerance = Number.isFinite(Number(measurement.tolerancia))
-      ? Number(measurement.tolerancia)
-      : 0;
-
-    if (!Number.isFinite(value) || !measurement.atributo_normalizado) continue;
-
-    conditions.push(`
-      EXISTS (
-        SELECT 1
-        FROM producto_atributos pam
-        WHERE pam.producto_id = p.id
-          AND pam.buscable = 1
-          AND pam.atributo_normalizado = ?
-          AND pam.valor_numero BETWEEN ? AND ?
-      )
-    `);
-
-    params.push(
-      normalizeText(measurement.atributo_normalizado),
-      value - tolerance,
-      value + tolerance
-    );
-  }
-
-  /**
-   * Si hay código, ese grupo basta para buscar.
-   * Si no hay código, debe existir pieza/familia/síntoma/producto.
-   */
-  if (hasCodes) {
-    conditions.push(`(${codeConditions.join(" OR ")})`);
-  } else if (productConditions.length > 0) {
-    conditions.push(`(${productConditions.join(" OR ")})`);
-  }
-
-  /**
-   * El vehículo afina resultados, no reemplaza la pieza.
-   */
-  if (vehicleConditions.length > 0) {
-    conditions.push(`(${vehicleConditions.join(" AND ")})`);
-  }
-
-  const excludedVehicleTokens = Array.isArray(intent.excluded_vehicle_tokens)
-    ? intent.excluded_vehicle_tokens
-    : Array.isArray(intent.excluded_tokens)
-      ? intent.excluded_tokens
-      : [];
-
-  if (excludedVehicleTokens.length) {
-    for (const excluded of excludedVehicleTokens) {
-      const normalizedExcluded = normalizeText(excluded);
-      const likeExcluded = `%${normalizedExcluded}%`;
-
-      conditions.push(`
-      NOT EXISTS (
-        SELECT 1
-        FROM producto_aplicaciones pax
-        WHERE pax.producto_id = p.id
-          AND (
-            UPPER(COALESCE(pax.marca_auto, '')) LIKE ?
-            OR UPPER(COALESCE(pax.modelo_auto, '')) LIKE ?
-          )
-      )
-    `);
-
-      params.push(likeExcluded);
-      params.push(likeExcluded);
-
-      conditions.push("UPPER(COALESCE(p.descripcion, '')) NOT LIKE ?");
-      params.push(likeExcluded);
-
-      conditions.push("UPPER(COALESCE(p.descripcion_web, '')) NOT LIKE ?");
-      params.push(likeExcluded);
-
-      conditions.push("UPPER(COALESCE(p.armadora, '')) NOT LIKE ?");
-      params.push(likeExcluded);
-
-      conditions.push("UPPER(COALESCE(c.nombre, '')) NOT LIKE ?");
-      params.push(likeExcluded);
-    }
-  }
-
-  return {
-    whereSql: conditions.join(" AND "),
-    params,
-  };
-}
-
-async function searchCandidates(intent) {
-  const { whereSql, params } = buildCandidateWhere(intent);
-
-  const [rows] = await pool.query(
-    `
-    SELECT
-      p.id,
-      p.codigo_andyfers,
-      p.codigo_importacion,
-      p.imagen_url,
-      c.nombre AS categoria,
-      p.armadora,
-      p.familia,
-      p.descripcion,
-      p.descripcion_web,
-      p.prioridad_ia,
-      COALESCE(SUM(CASE WHEN i.disponible_web = 1 THEN i.stock ELSE 0 END), 0) AS stock_total_web,
-      MIN(CASE WHEN i.disponible_web = 1 THEN i.precio ELSE NULL END) AS precio_minimo,
-      COUNT(DISTINCT pc.id) AS total_cruces
-    FROM productos p
-    JOIN categorias c ON c.id = p.categoria_id
-    LEFT JOIN inventario i ON i.producto_id = p.id
-    LEFT JOIN producto_cruces pc ON pc.producto_id = p.id
-    LEFT JOIN producto_aplicaciones pa ON pa.producto_id = p.id
-    LEFT JOIN producto_atributos pat ON pat.producto_id = p.id AND pat.buscable = 1
-    WHERE ${whereSql}
-    GROUP BY
-      p.id,
-      p.codigo_andyfers,
-      p.codigo_importacion,
-      p.imagen_url,
-      c.nombre,
-      p.armadora,
-      p.familia,
-      p.descripcion,
-      p.descripcion_web,
-      p.prioridad_ia
-    ORDER BY p.prioridad_ia DESC, p.id ASC
-    LIMIT 80
-    `,
-    params
-  );
-
-  return rows.filter(
-    (row) =>
-      isValidPublicCode(row.codigo_andyfers) ||
-      isValidPublicCode(row.codigo_importacion)
-  );
-}
-
-async function getCandidateDetails(productIds) {
-  if (!productIds.length) {
-    return {
-      aplicacionesByProduct: new Map(),
-      crucesByProduct: new Map(),
-      atributosByProduct: new Map(),
-    };
-  }
-
-  const placeholders = productIds.map(() => "?").join(", ");
-
-  const [aplicaciones] = await pool.query(
-    `
-    SELECT producto_id, marca_auto, modelo_auto, motor, anio_inicio, anio_fin, version_auto
-    FROM producto_aplicaciones
-    WHERE producto_id IN (${placeholders})
-    ORDER BY producto_id, marca_auto, modelo_auto, anio_inicio
-    `,
-    productIds
-  );
-
-  const [cruces] = await pool.query(
-    `
-    SELECT pc.producto_id, mc.nombre AS marca, pc.numero_parte, pc.numero_parte_normalizado
-    FROM producto_cruces pc
-    JOIN marcas_cruce mc ON mc.id = pc.marca_id
-    WHERE pc.producto_id IN (${placeholders})
-    ORDER BY pc.producto_id, mc.nombre, pc.numero_parte
-    `,
-    productIds
-  );
-
-  const [atributos] = await pool.query(
-    `
-    SELECT producto_id, atributo, atributo_normalizado, valor_texto, valor_normalizado, valor_numero, unidad
-    FROM producto_atributos
-    WHERE producto_id IN (${placeholders}) AND buscable = 1
-    ORDER BY producto_id, orden, atributo
-    `,
-    productIds
-  );
-
-  const groupByProduct = (rows) => {
-    const grouped = new Map();
-
-    for (const row of rows) {
-      if (!grouped.has(row.producto_id)) grouped.set(row.producto_id, []);
-      grouped.get(row.producto_id).push(row);
-    }
-
-    return grouped;
-  };
-
-  return {
-    aplicacionesByProduct: groupByProduct(aplicaciones),
-    crucesByProduct: groupByProduct(cruces),
-    atributosByProduct: groupByProduct(atributos),
-  };
-}
-
-function includesNormalized(haystack, needle) {
-  const normalizedHaystack = normalizeSearchQuery(haystack);
-  const normalizedNeedle = normalizeSearchQuery(needle);
-
-  return Boolean(normalizedNeedle && normalizedHaystack.includes(normalizedNeedle));
-}
-
-function scoreCandidate(row, intent, details) {
-  let score = 25;
-  const reasons = [];
-
-  const prioridad = Number(row.prioridad_ia || 0);
-
-  if (prioridad > 0) {
-    score += Math.min(prioridad, 15);
-    reasons.push("Producto con prioridad interna para IA.");
-  }
-
-  const searchableText = [
-    row.codigo_andyfers,
-    row.codigo_importacion,
-    row.categoria,
-    row.armadora,
-    row.familia,
-    row.descripcion,
-    row.descripcion_web,
-  ].join(" ");
-
-  const strictFamilyMatches = Array.isArray(intent.strict_product_family_tokens)
-    ? intent.strict_product_family_tokens.filter((token) => {
-      const familyText = normalizeSearchQuery(row.familia);
-      const categoryText = normalizeSearchQuery(row.categoria);
-      const normalizedToken = normalizeSearchQuery(token);
-
-      return (
-        normalizedToken &&
-        (familyText.includes(normalizedToken) || categoryText.includes(normalizedToken))
-      );
-    })
-    : [];
-
-  if (strictFamilyMatches.length) {
-    score += 35;
-    reasons.push(
-      `Coincide con familia/categoría solicitada: ${strictFamilyMatches
-        .slice(0, 3)
-        .join(", ")}.`
-    );
-  }
-
-  const matchedTokens = intent.tokens.filter((token) =>
-    includesNormalized(searchableText, token)
-  );
-
-  if (matchedTokens.length) {
-    score += Math.min(matchedTokens.length * 6, 30);
-    reasons.push(
-      `Coincide con términos de búsqueda: ${matchedTokens
-        .slice(0, 4)
-        .join(", ")}.`
-    );
-  }
-
-  const measurementFilters = Array.isArray(intent.medidas_detectadas)
-    ? intent.medidas_detectadas
-    : [];
-
-  if (measurementFilters.length) {
-    const atributos = details.atributos || [];
-    const matchedMeasurements = measurementFilters.filter((measurement) =>
-      atributos.some((attribute) => attributeMatchesMeasurement(attribute, measurement))
-    );
-
-    if (matchedMeasurements.length) {
-      score += Math.min(matchedMeasurements.length * 28, 42);
-      reasons.push(`Coincide con medida solicitada: ${describeMeasurementFilters(matchedMeasurements)}.`);
-    }
-  }
-
-  const normalizedCodes = [
-    normalizePartNumber(row.codigo_andyfers),
-    normalizePartNumber(row.codigo_importacion),
-  ];
-
-  const codeMatched = intent.numero_parte_tokens.find((token) =>
-    normalizedCodes.some((code) => code && code.includes(token))
-  );
-
-  if (codeMatched) {
-    score += 35;
-    reasons.push("Coincide con código o número de parte capturado.");
-  }
-
-  const cruces = details.cruces || [];
-
-  const cruceMatched = intent.numero_parte_tokens.find((token) =>
-    cruces.some((cruce) =>
-      String(cruce.numero_parte_normalizado || "").includes(token)
-    )
-  );
-
-  if (cruceMatched) {
-    score += 40;
-    reasons.push("Coincide con un cruce registrado en la base.");
-  }
-
-  const aplicaciones = details.aplicaciones || [];
-
-  if (intent.marca_auto) {
-    const marcaOk = aplicaciones.some((app) =>
-      includesNormalized(app.marca_auto, intent.marca_auto)
-    );
-
-    if (marcaOk) {
-      score += 14;
-      reasons.push(`Coincide con marca de vehículo: ${intent.marca_auto}.`);
-    }
-  }
-
-  if (intent.modelo_auto) {
-    const modeloOk = aplicaciones.some((app) =>
-      includesNormalized(app.modelo_auto, intent.modelo_auto)
-    );
-
-    if (modeloOk) {
-      score += 18;
-      reasons.push(`Coincide con modelo: ${intent.modelo_auto}.`);
-    }
-  }
-
-  if (intent.motor) {
-    const motorOk = aplicaciones.some((app) =>
-      includesNormalized(app.motor, intent.motor)
-    );
-
-    if (motorOk) {
-      score += 12;
-      reasons.push(`Coincide con motor: ${intent.motor}.`);
-    }
-  }
-
-  if (intent.anio) {
-    const yearOk = aplicaciones.some((app) => {
-      const start = Number(app.anio_inicio || intent.anio);
-      const end = Number(app.anio_fin || intent.anio);
-
-      return intent.anio >= start && intent.anio <= end;
+async function buildIntentWithSemanticNormalizer(cleanQuestion) {
+  let rawIntent = await buildIntent(cleanQuestion);
+
+  if (shouldUseSemanticIntentNormalizer(cleanQuestion, rawIntent)) {
+    const semanticResult = await normalizeUserIntentWithAi({
+      question: cleanQuestion,
+      localIntent: rawIntent,
     });
 
-    if (yearOk) {
-      score += 16;
-      reasons.push(`El año ${intent.anio} cae dentro de una aplicación registrada.`);
+    if (semanticResult.intent) {
+      rawIntent = applySemanticIntentToLocalIntent(
+        rawIntent,
+        semanticResult.intent
+      );
+
+      rawIntent.normalizador_ia_servicio = semanticResult.service;
+    } else {
+      rawIntent.normalizador_ia_servicio = semanticResult.service;
     }
   }
 
-  const stock = Number(row.stock_total_web || 0);
-
-  if (stock > 0) {
-    score += 4;
-    reasons.push("Tiene stock web de referencia.");
-  }
-
-  if (!reasons.length) {
-    reasons.push("Coincidencia general por descripción, familia o armadora.");
-  }
-
-  return {
-    score: clampNumber(Math.round(score), 1, 100),
-    reasons: reasons.slice(0, 6),
-  };
+  return rawIntent;
 }
 
-function formatCandidate(row, scoreData, details) {
-  const aplicaciones = (details.aplicaciones || []).slice(0, 5).map((app) => ({
-    marca_auto: app.marca_auto,
-    modelo_auto: app.modelo_auto,
-    motor: app.motor,
-    anio_inicio: app.anio_inicio,
-    anio_fin: app.anio_fin,
-    version_auto: app.version_auto,
-  }));
-
-  const cruces = (details.cruces || []).slice(0, 8).map((cruce) => ({
-    marca: cruce.marca,
-    numero_parte: cruce.numero_parte,
-  }));
-
-  const atributos = (details.atributos || []).slice(0, 8).map((attr) => ({
-    atributo: attr.atributo,
-    atributo_normalizado: attr.atributo_normalizado,
-    valor: attr.valor_texto,
-    valor_numero: attr.valor_numero,
-    unidad: attr.unidad,
-  }));
-
-  return {
-    id: row.id,
-    producto_id: row.id,
-    codigo_andyfers: row.codigo_andyfers,
-    codigo_importacion: row.codigo_importacion,
-    imagen_url: row.imagen_url,
-    categoria: row.categoria,
-    armadora: row.armadora,
-    familia: row.familia,
-    descripcion: row.descripcion,
-    descripcion_web: row.descripcion_web,
-    prioridad_ia: Number(row.prioridad_ia || 0),
-    stock_total_web: Number(row.stock_total_web || 0),
-    precio_minimo: row.precio_minimo,
-    total_cruces: Number(row.total_cruces || 0),
-    compatibilidad_estimada: scoreData.score,
-    razones_compatibilidad: scoreData.reasons,
-    aplicaciones,
-    cruces,
-    atributos,
-  };
-}
-
-function buildNoResultsAnswer(intent) {
-  const suggestions = [];
-
-  if (intent.numero_parte_tokens.length) {
-    suggestions.push("El código podría no estar registrado o puede tener una variación.");
-  }
-
-  if (intent.marca_auto || intent.modelo_auto || intent.anio || intent.motor) {
-    suggestions.push("Revisa que marca, modelo, año y motor estén correctos.");
-  }
-
-  if (Array.isArray(intent.medidas_detectadas) && intent.medidas_detectadas.length) {
-    suggestions.push(
-      `Detecté la medida "${describeMeasurementFilters(intent.medidas_detectadas)}", pero no encontré una coincidencia confiable.`
-    );
-  }
-
-  if (intent.terminos_producto_detectados.length) {
-    suggestions.push(
-      `Detecté la pieza "${intent.terminos_producto_detectados.join(", ")}", pero no encontré una coincidencia confiable.`
-    );
-  }
-
-  if (!suggestions.length) {
-    suggestions.push("Agrega marca, modelo, año, motor o número de parte para mejorar la búsqueda.");
-  }
-
-  return [
-    "No encontré una coincidencia confiable en el catálogo con los datos escritos.",
-    ...suggestions,
-    "Un asesor puede ayudarte a validarlo manualmente.",
-  ].join(" ");
-}
-
-function buildLocalAnswer({ intent, products }) {
-  if (!products.length) {
-    return buildNoResultsAnswer(intent);
-  }
-
-  const top = products[0];
-
-  const conditionText = Array.isArray(intent.condiciones_detectadas)
-    ? intent.condiciones_detectadas.map((item) => item.label).join(" ")
-    : "";
-
-  const preferenceText = intent.preferencias_comerciales?.economica
-    ? "Ordené las opciones dando prioridad a productos con precio registrado más bajo."
-    : "";
-
-  const productBrandExclusionText =
-    Array.isArray(intent.excluded_product_brand_tokens) &&
-      intent.excluded_product_brand_tokens.length
-      ? `Tomé en cuenta que buscas una alternativa o una opción no original. La marca/fabricante final de la pieza debe validarla ventas.`
-      : "";
-
-  if (intent.modo_busqueda === "EXPLORATORY") {
-    const exclusionText =
-      Array.isArray(intent.excluded_tokens) && intent.excluded_tokens.length
-        ? ` que no corresponden a ${intent.excluded_tokens.join(", ")}`
-        : "";
-
-    return [
-      `Encontré ${products.length} opción(es) del catálogo${exclusionText}.`,
-      `La primera opción es ${top.codigo_andyfers || top.codigo_importacion}: ${top.descripcion}.`,
-      preferenceText,
-      conditionText ? `Nota: ${conditionText}` : "",
-      "Para confirmar cuál aplica a tu vehículo, dime marca, modelo, año y motor. Ventas valida compatibilidad y disponibilidad final.",
-    ]
-      .filter(Boolean)
-      .join(" ");
-  }
-
-  const vehicleParts = [
-    intent.marca_auto,
-    intent.modelo_auto,
-    intent.anio,
-    intent.motor,
-  ]
-    .filter(Boolean)
-    .join(" ");
-
-  const symptomText = Array.isArray(intent.sintomas_detectados)
-    ? intent.sintomas_detectados
-      .filter((item) => item.searchable)
-      .map((item) => item.label)
-      .join(", ")
-    : "";
-
-  const introParts = [];
-
-  if (vehicleParts) {
-    introParts.push(`Con la información detectada para ${vehicleParts}`);
-  } else {
-    introParts.push("Con la información escrita");
-  }
-
-  if (symptomText) {
-    introParts.push(`y el síntoma de ${symptomText}`);
-  }
-
-  const intro = `${introParts.join(" ")} encontré ${products.length} opción(es) posibles en el catálogo Andyfers.`;
-
-  return [
-    intro,
-    `La opción más fuerte es ${top.codigo_andyfers || top.codigo_importacion}: ${top.descripcion}.`,
-    `Compatibilidad estimada: ${top.compatibilidad_estimada}%.`,
-    conditionText ? `Nota: ${conditionText}` : "",
-    preferenceText,
-    productBrandExclusionText,
-    "Esta recomendación es orientativa. Ventas debe validar compatibilidad y disponibilidad final antes de confirmar la cotización.",
-  ]
-    .filter(Boolean)
-    .join(" ");
-}
-
-function buildAiMessages({ question, intent, products }) {
-  const contextProducts = products.slice(0, 5).map((product) => ({
-    producto_id: product.id,
-    codigo_andyfers: product.codigo_andyfers,
-    codigo_importacion: product.codigo_importacion,
-    descripcion: product.descripcion,
-    familia: product.familia,
-    armadora: product.armadora,
-    categoria: product.categoria,
-    compatibilidad_estimada: product.compatibilidad_estimada,
-    razones_compatibilidad: product.razones_compatibilidad,
-    aplicaciones: product.aplicaciones,
-    cruces: product.cruces,
-  }));
-
-  return [
-    {
-      role: "user",
-      content: JSON.stringify(
-        {
-          pregunta_cliente: question,
-          intencion_detectada: intent,
-          contexto_productos: contextProducts,
-        },
-        null,
-        2
-      ),
-    },
-  ];
-}
-
-async function logAiSearch({
-  question,
+async function answerAdvisorMode({
+  cleanQuestion,
   intent,
-  candidates,
-  recommended,
-  service,
-  response,
+  route,
+  session,
+  ignoreSessionContext,
   origen,
 }) {
-  try {
-    await pool.query(
-      `
-      INSERT INTO ia_consultas_log
-        (
-          pregunta_usuario,
-          intencion_json,
-          productos_contexto_json,
-          servicio_ia,
-          respuesta,
-          total_candidatos,
-          total_recomendados,
-          origen,
-          productos_contexto,
-          productos_recomendados
-        )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-      [
-        question,
-        JSON.stringify(intent),
-        JSON.stringify(candidates.slice(0, 15)),
-        service,
-        response,
-        candidates.length,
-        recommended.length,
-        origen,
-        JSON.stringify(candidates.slice(0, 15)),
-        JSON.stringify(recommended),
-      ]
-    );
-  } catch (error) {
-    console.error("No se pudo guardar ia_consultas_log:", error.message);
-  }
-}
-
-function compareCandidatesByIntent(intent) {
-  return (a, b) => {
-    const preferEconomic = intent.preferencias_comerciales?.economica;
-
-    if (preferEconomic) {
-      const priceA = Number(a.precio_minimo || 0);
-      const priceB = Number(b.precio_minimo || 0);
-
-      const hasPriceA = priceA > 0;
-      const hasPriceB = priceB > 0;
-
-      if (hasPriceA && hasPriceB && priceA !== priceB) {
-        return priceA - priceB;
-      }
-
-      if (hasPriceA && !hasPriceB) return -1;
-      if (!hasPriceA && hasPriceB) return 1;
-    }
-
-    if (b.compatibilidad_estimada !== a.compatibilidad_estimada) {
-      return b.compatibilidad_estimada - a.compatibilidad_estimada;
-    }
-
-    return Number(b.prioridad_ia || 0) - Number(a.prioridad_ia || 0);
+  const advisoryIntent = {
+    ...intent,
+    gate_reason: route.reason,
+    modo_busqueda: route.mode,
+    modo_conversacion: route.mode,
+    conversation_route: route,
+    session_id: session.session_id,
   };
-}
 
-function shouldIgnoreSessionContextForQuestion(rawIntent = {}) {
-  const vehicleExclusions =
-    Array.isArray(rawIntent.excluded_vehicle_tokens)
-      ? rawIntent.excluded_vehicle_tokens
-      : Array.isArray(rawIntent.excluded_tokens)
-        ? rawIntent.excluded_tokens
-        : [];
+  const updatedContext = ignoreSessionContext
+    ? {}
+    : await updateSearchSessionContext({
+      sessionId: session.session_id,
+      previousContext: session.contexto,
+      intent: advisoryIntent,
+      question: cleanQuestion,
+      origen,
+    });
 
-  /**
-   * Solo ignoramos contexto cuando la exclusión es de vehículo/aplicación.
-   */
-  return vehicleExclusions.length > 0;
-}
+  const effectiveIntent = {
+    ...advisoryIntent,
+    contexto_corto: updatedContext,
+  };
 
-function productMatchesExcluded(product = {}, intent = {}) {
-  const excludedTokens = Array.isArray(intent.excluded_vehicle_tokens)
-    ? intent.excluded_vehicle_tokens
-    : Array.isArray(intent.excluded_tokens)
-      ? intent.excluded_tokens
-      : [];
-
-  if (!excludedTokens.length) return false;
-
-  const text = normalizeText(
-    [
-      product.codigo_andyfers,
-      product.codigo_importacion,
-      product.categoria,
-      product.armadora,
-      product.familia,
-      product.descripcion,
-      product.descripcion_web,
-      ...(Array.isArray(product.aplicaciones)
-        ? product.aplicaciones.flatMap((app) => [
-          app.marca_auto,
-          app.modelo_auto,
-          app.version_auto,
-          app.motor,
-        ])
-        : []),
-      ...(Array.isArray(product.cruces)
-        ? product.cruces.flatMap((cruce) => [
-          cruce.marca,
-          cruce.numero_parte,
-        ])
-        : []),
-    ].join(" ")
-  );
-
-  return excludedTokens.some((excluded) => {
-    const cleanExcluded = normalizeText(excluded);
-
-    return cleanExcluded && text.includes(cleanExcluded);
+  let service = "LOCAL_ASESOR_CONTROLADO";
+  let answer = buildAdvisorLocalAnswer({
+    mode: route.mode,
+    intent: effectiveIntent,
+    sessionContext: updatedContext,
   });
+
+  try {
+    const aiResult = await generateAiAdvisorAnswer({
+      messages: buildAdvisorAiMessages({
+        question: cleanQuestion,
+        mode: route.mode,
+        route,
+        intent: effectiveIntent,
+        sessionContext: updatedContext,
+      }),
+    });
+
+    service = aiResult.service || service;
+
+    if (aiResult.response) {
+      answer = aiResult.response;
+    }
+  } catch (error) {
+    service = "LOCAL_ASESOR_CONTROLADO";
+    console.error("IA asesora falló, se usó respuesta local:", error.message);
+  }
+
+  await logAiSearch({
+    question: cleanQuestion,
+    intent: effectiveIntent,
+    candidates: [],
+    recommended: [],
+    service,
+    response: answer,
+    origen,
+  });
+
+  return buildEmptyResult({
+    intent: effectiveIntent,
+    sessionId: session.session_id,
+    context: updatedContext,
+    answer,
+    service,
+    requiresMoreData: route.requiresMoreData !== false,
+  });
+}
+
+async function runProductSearch({ cleanQuestion, effectiveIntent, origen }) {
+  const rows = await searchCandidates(effectiveIntent);
+  const ids = rows.map((row) => row.id);
+  const related = await getCandidateDetails(ids);
+
+  const scored = rows
+    .map((row) => {
+      const details = {
+        aplicaciones: related.aplicacionesByProduct.get(row.id) || [],
+        cruces: related.crucesByProduct.get(row.id) || [],
+        atributos: related.atributosByProduct.get(row.id) || [],
+      };
+
+      const scoreData = scoreCandidate(row, effectiveIntent, details);
+
+      return formatCandidate(row, scoreData, details);
+    })
+    .filter((product) => !productMatchesExcluded(product, effectiveIntent))
+    .sort(compareCandidatesByIntent(effectiveIntent));
+
+  const recommended = scored.slice(0, 6);
+
+  let service = "LOCAL_CONTROLADO";
+  let answer = buildLocalAnswer({
+    question: cleanQuestion,
+    intent: effectiveIntent,
+    products: recommended,
+  });
+
+  const conversationMode = effectiveIntent.modo_conversacion;
+  let useAdvisorWriter = false;
+  let advisorEvidence = null;
+
+  if (conversationMode === CATALOG_CONVERSATION_MODES.PRODUCT_COMPARISON) {
+    service = "LOCAL_COMPARADOR_CONTROLADO";
+    advisorEvidence = buildProductComparisonEvidence({
+      products: recommended,
+      intent: effectiveIntent,
+    });
+
+    answer = buildProductComparisonLocalAnswer({
+      products: recommended,
+      intent: effectiveIntent,
+    });
+
+    useAdvisorWriter = recommended.length > 0;
+  }
+
+  if (conversationMode === CATALOG_CONVERSATION_MODES.COMPATIBILITY_EXPLANATION) {
+    service = "LOCAL_COMPATIBILIDAD_CONTROLADA";
+    advisorEvidence = buildCompatibilityEvidence({
+      products: recommended,
+      intent: effectiveIntent,
+    });
+
+    answer = buildCompatibilityExplanationLocalAnswer({
+      products: recommended,
+      intent: effectiveIntent,
+    });
+
+    useAdvisorWriter = recommended.length > 0;
+  }
+
+  if (recommended.length > 0) {
+    try {
+      const aiResult = useAdvisorWriter
+        ? await generateAiAdvisorAnswer({
+          messages: buildAdvisorAiMessages({
+            question: cleanQuestion,
+            mode: conversationMode,
+            route: effectiveIntent.conversation_route,
+            intent: effectiveIntent,
+            sessionContext: effectiveIntent.contexto_corto || {},
+            products: recommended,
+            evidence: advisorEvidence,
+          }),
+        })
+        : await generateAiAnswer({
+          messages: buildAiMessages({
+            question: cleanQuestion,
+            intent: effectiveIntent,
+            products: recommended,
+          }),
+        });
+
+      service = aiResult.service || service;
+
+      if (aiResult.response) {
+        answer = aiResult.response;
+      }
+    } catch (error) {
+      console.error("IA externa falló, se usó respuesta local:", error.message);
+    }
+  }
+
+  await logAiSearch({
+    question: cleanQuestion,
+    intent: effectiveIntent,
+    candidates: scored,
+    recommended,
+    service,
+    response: answer,
+    origen,
+  });
+
+  return {
+    intencion: effectiveIntent,
+    session_id: effectiveIntent.session_id,
+    contexto_corto: effectiveIntent.contexto_corto || {},
+    respuesta: answer,
+    servicio_ia: service,
+    total_candidatos: scored.length,
+    total_recomendados: recommended.length,
+    productos: recommended,
+  };
 }
 
 export async function searchCatalogWithAi({
@@ -2704,6 +343,7 @@ export async function searchCatalogWithAi({
       question: cleanQuestion,
       intent: {
         gate_reason: "FUTURE_STOCK_NOT_AVAILABLE",
+        modo_conversacion: CATALOG_CONVERSATION_MODES.STOCK_QUERY,
       },
       candidates: [],
       recommended: [],
@@ -2712,17 +352,17 @@ export async function searchCatalogWithAi({
       origen,
     });
 
-    return {
-      intencion: {
+    return buildEmptyResult({
+      intent: {
         gate_reason: "FUTURE_STOCK_NOT_AVAILABLE",
+        modo_conversacion: CATALOG_CONVERSATION_MODES.STOCK_QUERY,
       },
-      respuesta: answer,
-      servicio_ia: "LOCAL_CONTROLADO",
-      total_candidatos: 0,
-      total_recomendados: 0,
-      productos: [],
-      requiere_mas_datos: true,
-    };
+      sessionId: null,
+      context: {},
+      answer,
+      service: "LOCAL_CONTROLADO",
+      requiresMoreData: true,
+    });
   }
 
   if (asksForBranchStock(cleanQuestion)) {
@@ -2733,6 +373,7 @@ export async function searchCatalogWithAi({
       question: cleanQuestion,
       intent: {
         gate_reason: "BRANCH_STOCK_NOT_AVAILABLE",
+        modo_conversacion: CATALOG_CONVERSATION_MODES.STOCK_QUERY,
       },
       candidates: [],
       recommended: [],
@@ -2741,70 +382,21 @@ export async function searchCatalogWithAi({
       origen,
     });
 
-    return {
-      intencion: {
-        gate_reason: "BRANCH_STOCK_NOT_AVAILABLE",
-      },
-      respuesta: answer,
-      servicio_ia: "LOCAL_CONTROLADO",
-      total_candidatos: 0,
-      total_recomendados: 0,
-      productos: [],
-      requiere_mas_datos: true,
-    };
-  }
-
-  if (hasComparisonIntent(cleanQuestion)) {
-    const answer =
-      "Todavía no puedo comparar productos directamente. Puedo ayudarte a buscar cada pieza por código, marca, modelo, año o motor, y ventas puede validar la diferencia técnica final.";
-
-    await logAiSearch({
-      question: cleanQuestion,
+    return buildEmptyResult({
       intent: {
-        gate_reason: "COMPARISON_NOT_READY",
+        gate_reason: "BRANCH_STOCK_NOT_AVAILABLE",
+        modo_conversacion: CATALOG_CONVERSATION_MODES.STOCK_QUERY,
       },
-      candidates: [],
-      recommended: [],
+      sessionId: null,
+      context: {},
+      answer,
       service: "LOCAL_CONTROLADO",
-      response: answer,
-      origen,
+      requiresMoreData: true,
     });
-
-    return {
-      intencion: {
-        gate_reason: "COMPARISON_NOT_READY",
-      },
-      respuesta: answer,
-      servicio_ia: "LOCAL_CONTROLADO",
-      total_candidatos: 0,
-      total_recomendados: 0,
-      productos: [],
-      requiere_mas_datos: true,
-    };
   }
 
   const session = await getOrCreateSearchSession(rawSessionId);
-
-  let rawIntent = await buildIntent(cleanQuestion);
-
-  if (shouldUseSemanticIntentNormalizer(cleanQuestion, rawIntent)) {
-    const semanticResult = await normalizeUserIntentWithAi({
-      question: cleanQuestion,
-      localIntent: rawIntent,
-    });
-
-    if (semanticResult.intent) {
-      rawIntent = applySemanticIntentToLocalIntent(
-        rawIntent,
-        semanticResult.intent
-      );
-
-      rawIntent.normalizador_ia_servicio = semanticResult.service;
-    } else {
-      rawIntent.normalizador_ia_servicio = semanticResult.service;
-    }
-  }
-
+  const rawIntent = await buildIntentWithSemanticNormalizer(cleanQuestion);
   const ignoreSessionContext = shouldIgnoreSessionContextForQuestion(rawIntent);
 
   const intent = ignoreSessionContext
@@ -2817,17 +409,40 @@ export async function searchCatalogWithAi({
     }
     : mergeSessionContextWithIntent(rawIntent, session.contexto);
 
+  const route = routeCatalogConversation({
+    question: cleanQuestion,
+    intent,
+    sessionContext: session.contexto,
+  });
+
+  if (route.mode !== CATALOG_CONVERSATION_MODES.PRODUCT_SEARCH && !route.shouldSearchCatalog) {
+    return answerAdvisorMode({
+      cleanQuestion,
+      intent,
+      route,
+      session,
+      ignoreSessionContext,
+      origen,
+    });
+  }
+
   const gate = buildIntentGate({
     question: cleanQuestion,
     intent,
   });
+
+  const sessionIntentForUpdate = {
+    ...intent,
+    modo_conversacion: CATALOG_CONVERSATION_MODES.PRODUCT_SEARCH,
+    limpiar_pendiente_asesoria: gate.allowed,
+  };
 
   const updatedContext = ignoreSessionContext
     ? {}
     : await updateSearchSessionContext({
       sessionId: session.session_id,
       previousContext: session.contexto,
-      intent,
+      intent: sessionIntentForUpdate,
       question: cleanQuestion,
       origen,
     });
@@ -2836,20 +451,43 @@ export async function searchCatalogWithAi({
     ...intent,
     gate_reason: gate.reason,
     modo_busqueda: gate.mode || "COMPATIBILITY",
+    modo_conversacion: route.mode,
+    conversation_route: route,
     session_id: session.session_id,
     contexto_corto: updatedContext,
   };
 
   if (!gate.allowed) {
+    let service = "LOCAL_CONTROLADO";
     let answer = gate.message;
 
     if (
       gate.reason === "VEHICLE_WITHOUT_PART" &&
-      hasVehicleContext(updatedContext)
+      hasVehicleContext(updatedContext) &&
+      Array.isArray(updatedContext.pendiente_sintomas) &&
+      updatedContext.pendiente_sintomas.length
     ) {
-      const vehicleText = buildVehicleContextText(updatedContext);
+      const advisorRoute = {
+        mode: CATALOG_CONVERSATION_MODES.DIAGNOSTIC_GUIDE,
+        reason: "PENDING_DIAGNOSTIC_CONTEXT",
+        shouldSearchCatalog: false,
+        requiresMoreData: true,
+      };
 
-      answer = `Perfecto, usaré ${vehicleText} como vehículo para esta búsqueda. Ahora dime qué pieza necesitas, por ejemplo: termostato, bomba de agua, radiador, manguera o número de parte.`;
+      const advisorIntent = {
+        ...effectiveIntent,
+        gate_reason: advisorRoute.reason,
+        modo_busqueda: advisorRoute.mode,
+        modo_conversacion: advisorRoute.mode,
+        conversation_route: advisorRoute,
+      };
+
+      answer = buildAdvisorLocalAnswer({
+        mode: advisorRoute.mode,
+        intent: advisorIntent,
+        sessionContext: updatedContext,
+      });
+      service = "LOCAL_ASESOR_CONTROLADO";
     }
 
     await logAiSearch({
@@ -2860,94 +498,29 @@ export async function searchCatalogWithAi({
       },
       candidates: [],
       recommended: [],
-      service: "LOCAL_CONTROLADO",
+      service,
       response: answer,
       origen,
     });
 
-    return {
-      intencion: {
+    return buildEmptyResult({
+      intent: {
         ...intent,
         gate_reason: gate.reason,
+        modo_conversacion: route.mode,
+        conversation_route: route,
       },
-      session_id: session.session_id,
-      contexto_corto: updatedContext,
-      respuesta: answer,
-      servicio_ia: "LOCAL_CONTROLADO",
-      total_candidatos: 0,
-      total_recomendados: 0,
-      productos: [],
-      requiere_mas_datos: true,
-    };
+      sessionId: session.session_id,
+      context: updatedContext,
+      answer,
+      service,
+      requiresMoreData: true,
+    });
   }
 
-  const rows = await searchCandidates(effectiveIntent);
-  const ids = rows.map((row) => row.id);
-  const related = await getCandidateDetails(ids);
-
-  const scored = rows
-    .map((row) => {
-      const details = {
-        aplicaciones: related.aplicacionesByProduct.get(row.id) || [],
-        cruces: related.crucesByProduct.get(row.id) || [],
-        atributos: related.atributosByProduct.get(row.id) || [],
-      };
-
-      const scoreData = scoreCandidate(row, effectiveIntent, details);
-
-      return formatCandidate(row, scoreData, details);
-    })
-    .filter((product) => !productMatchesExcluded(product, effectiveIntent))
-    .sort(compareCandidatesByIntent(effectiveIntent));
-
-  const recommended = scored.slice(0, 6);
-
-  let service = "LOCAL_CONTROLADO";
-  let answer = buildLocalAnswer({
-    question: cleanQuestion,
-    intent: effectiveIntent,
-    products: recommended,
-  });
-
-  if (recommended.length > 0) {
-    try {
-      const aiResult = await generateAiAnswer({
-        messages: buildAiMessages({
-          question: cleanQuestion,
-          intent: effectiveIntent,
-          products: recommended,
-        }),
-      });
-
-      service = aiResult.service || service;
-
-      if (aiResult.response) {
-        answer = aiResult.response;
-      }
-    } catch (error) {
-      service = "LOCAL_CONTROLADO";
-      console.error("IA externa falló, se usó respuesta local:", error.message);
-    }
-  }
-
-  await logAiSearch({
-    question: cleanQuestion,
-    intent: effectiveIntent,
-    candidates: scored,
-    recommended,
-    service,
-    response: answer,
+  return runProductSearch({
+    cleanQuestion,
+    effectiveIntent,
     origen,
   });
-
-  return {
-    intencion: effectiveIntent,
-    session_id: session.session_id,
-    contexto_corto: updatedContext,
-    respuesta: answer,
-    servicio_ia: service,
-    total_candidatos: scored.length,
-    total_recomendados: recommended.length,
-    productos: recommended,
-  };
 }

@@ -149,4 +149,73 @@ export function buildIntentNormalizerMessages({ question, localIntent }) {
       ),
     },
   ];
+};
+
+export function buildAdvisorMessages(messages = []) {
+  const payload = extractPayloadFromMessages(messages) || {};
+
+  const advisorSystem = [
+    "Eres Andy-Bot, asesor inteligente de refacciones de Andyfers.",
+    "Tu especialidad principal es sistema de enfriamiento automotriz: bomba de agua, termostato, radiador, tapón, depósito, mangueras, ventilador, motoventilador, sensores de temperatura, toma de agua, poleas y anticongelante.",
+    "Tu objetivo es que el cliente sienta que habla con un asesor útil, no con un buscador rígido.",
+    "Puedes explicar conceptos, comparar familias de piezas y orientar síntomas de forma general.",
+    "Si recibes contexto_productos, solo puedes comparar o explicar usando esos productos.",
+    "No inventes códigos, precios, stock, marcas, cruces, atributos, compatibilidades ni aplicaciones.",
+    "No confirmes compatibilidad absoluta; usa frases como 'según la información del catálogo' o 'compatibilidad estimada'.",
+    "No digas que una marca/fabricante está confirmado si marca_producto_confirmada no es true o si no viene el campo.",
+    "Si falta información para comparar o validar, pide el dato faltante de forma natural.",
+    "Si el usuario es principiante, explica simple. Si usa términos técnicos, responde con más precisión.",
+    "No uses tablas, markdown, negritas ni listas largas.",
+    "Responde máximo 3 oraciones.",
+    "Siempre que aplique, aclara que ventas valida compatibilidad y disponibilidad final.",
+    "Responde en español mexicano natural.",
+  ].join(" ");
+
+  const compactPayload = {
+    pregunta_cliente: payload.pregunta_cliente || "",
+    modo_conversacion: payload.modo_conversacion || null,
+    ruta: payload.ruta || {},
+    intencion_detectada: payload.intencion_detectada || {},
+    contexto_sesion: payload.contexto_sesion || {},
+    contexto_productos: Array.isArray(payload.contexto_productos)
+      ? payload.contexto_productos.slice(0, 6).map((product) => ({
+          producto_id: product.producto_id || product.id,
+          codigo_andyfers: product.codigo_andyfers,
+          codigo_importacion: product.codigo_importacion,
+          descripcion: product.descripcion,
+          descripcion_web: product.descripcion_web,
+          familia: product.familia,
+          categoria: product.categoria,
+          armadora: product.armadora,
+          marca_producto: product.marca_producto,
+          tipo_marca_producto: product.tipo_marca_producto,
+          marca_producto_confirmada: product.marca_producto_confirmada,
+          precio_minimo: product.precio_minimo,
+          stock_total_web: product.stock_total_web,
+          compatibilidad_estimada: product.compatibilidad_estimada,
+          razones_compatibilidad: product.razones_compatibilidad,
+          aplicaciones: Array.isArray(product.aplicaciones)
+            ? product.aplicaciones.slice(0, 5)
+            : [],
+          cruces: Array.isArray(product.cruces)
+            ? product.cruces.slice(0, 5)
+            : [],
+          atributos: Array.isArray(product.atributos)
+            ? product.atributos.slice(0, 8)
+            : [],
+        }))
+      : [],
+    evidencia_controlada: payload.evidencia_controlada || null,
+  };
+
+  return [
+    {
+      role: "system",
+      content: advisorSystem,
+    },
+    {
+      role: "user",
+      content: JSON.stringify(compactPayload, null, 2),
+    },
+  ];
 }

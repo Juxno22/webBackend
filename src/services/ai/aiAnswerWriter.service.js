@@ -1,7 +1,7 @@
 import { getAiConfig } from "./aiConfig.service.js";
 import { callOpenRouter } from "./aiOpenRouterClient.service.js";
 import { extractAllowedCodes, extractPayloadFromMessages } from "./aiPayload.service.js";
-import { buildOpenRouterMessages } from "./aiPromptBuilder.service.js";
+import { buildAdvisorMessages, buildOpenRouterMessages } from "./aiPromptBuilder.service.js";
 import {
   responseHasBadChatFormatting,
   responseLooksLikeProviderMetadata,
@@ -89,6 +89,59 @@ export async function generateAiAnswer({ messages = [] } = {}) {
 
     return {
       service: "LOCAL_CONTROLADO",
+      response: null,
+    };
+  }
+}
+
+export async function generateAiAdvisorAnswer({ messages = [] } = {}) {
+  const config = getAiConfig();
+
+  if (!config.enabled || config.provider !== "openrouter" || !config.apiKey) {
+    return {
+      service: "LOCAL_ASESOR_CONTROLADO",
+      response: null,
+    };
+  }
+
+  try {
+    const response = await callOpenRouter({
+      messages: buildAdvisorMessages(messages),
+      config,
+      temperature: 0.35,
+      maxTokens: 520,
+    });
+
+    if (!response) {
+      return {
+        service: "LOCAL_ASESOR_CONTROLADO",
+        response: null,
+      };
+    }
+
+    if (responseLooksLikeProviderMetadata(response)) {
+      return {
+        service: "LOCAL_ASESOR_AI_METADATA",
+        response: null,
+      };
+    }
+
+    if (responseHasBadChatFormatting(response)) {
+      return {
+        service: "LOCAL_ASESOR_BAD_FORMAT",
+        response: null,
+      };
+    }
+
+    return {
+      service: `OPENROUTER_ASESOR:${config.model}`,
+      response,
+    };
+  } catch (error) {
+    console.error("OpenRouter asesor falló:", error.message);
+
+    return {
+      service: "LOCAL_ASESOR_CONTROLADO",
       response: null,
     };
   }
