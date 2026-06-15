@@ -15,3 +15,5 @@ export {
 } from "./aiAnswerWriter.service.js";
 
 export { runMultiProviderChat } from "./providers/aiProviderRunner.service.js";
+
+export { polishAdvisorResponse } from "./aiAdvisorQuality.service.js";

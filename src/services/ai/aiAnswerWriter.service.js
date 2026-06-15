@@ -1,7 +1,4 @@
-import {
-  getAiAdvisorConfig,
-  getAiConfig,
-} from "./aiConfig.service.js";
+import { getAiAdvisorConfig, getAiConfig } from "./aiConfig.service.js";
 import { callOpenRouter } from "./aiOpenRouterClient.service.js";
 import {
   extractAllowedCodes,
@@ -17,6 +14,7 @@ import {
   responseMentionsUnknownCode,
 } from "./aiResponseGuard.service.js";
 import { runMultiProviderChat } from "./providers/aiProviderRunner.service.js";
+import { polishAdvisorResponse } from "./aiAdvisorQuality.service.js";
 
 function validateAiResponse({
   response,
@@ -106,9 +104,18 @@ async function tryOpenRouterAnswer({
       };
     }
 
+    const payload = extractPayloadFromMessages(messages);
+    const isAdvisor = String(externalPrefix).includes("ASESOR");
+
     return {
       service: `${externalPrefix}:${config.model}`,
-      response: validation.response,
+      response: isAdvisor
+        ? polishAdvisorResponse({
+          response: validation.response,
+          mode: payload?.modo_conversacion,
+          intent: payload?.intencion_detectada || {},
+        })
+        : validation.response,
     };
   } catch (error) {
     console.error(`${externalPrefix} falló:`, error.message);
@@ -150,9 +157,15 @@ async function tryMultiProviderAdvisorAnswer({ messages = [] } = {}) {
     };
   }
 
+  const payload = extractPayloadFromMessages(messages);
+
   return {
     service: `MULTI_ASESOR:${result.service}`,
-    response: validation.response,
+    response: polishAdvisorResponse({
+      response: validation.response,
+      mode: payload?.modo_conversacion,
+      intent: payload?.intencion_detectada || {},
+    }),
   };
 }
 
@@ -184,9 +197,9 @@ export async function generateAiAdvisorAnswer({ messages = [] } = {}) {
     return multiResult.response
       ? multiResult
       : {
-          service: multiResult.service || "LOCAL_ASESOR_CONTROLADO",
-          response: null,
-        };
+        service: multiResult.service || "LOCAL_ASESOR_CONTROLADO",
+        response: null,
+      };
   }
 
   if (advisorConfig.provider === "openrouter") {
