@@ -987,8 +987,25 @@ function detectVehicleAlias(question) {
   return null;
 }
 
+function isInvalidModelDetectedFromTechnicalMeasurement(question, modelo) {
+  const text = normalizeText(question);
+  const cleanModel = normalizeText(modelo);
+
+  if (!cleanModel || !/^\d{1,3}$/.test(cleanModel)) return false;
+
+  const escaped = cleanModel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  return (
+    new RegExp(`\\b${escaped}\\s+(CANALES?|RANURAS?|COSTILLAS?|PISTAS?)\\b`).test(text) ||
+    new RegExp(`\\b(CANALES?|RANURAS?|COSTILLAS?|PISTAS?)\\s+(DE\\s+)?${escaped}\\b`).test(text) ||
+    new RegExp(`\\b${escaped}\\s*(MM|MILIMETROS|MILÍMETROS|CM|PULGADAS?|IN)\\b`).test(text) ||
+    new RegExp(`\\b(DIAMETRO|DIÁMETRO|ANCHO|EJE|SEPARACION|SEPARACIÓN|EXCENTRICIDAD|PASO)\\s+(DE\\s+)?${escaped}\\s*(MM|MILIMETROS|MILÍMETROS|CM|PULGADAS?|IN)?\\b`).test(text)
+  );
+}
+
 async function detectVehicleFromDb(question, excludedTokens = []) {
   const normalizedQuestion = ` ${normalizeSearchQuery(question)} `;
+  const normalizedTextQuestion = ` ${normalizeText(question)} `;
   const vehicleAlias = detectVehicleAlias(question);
 
   if (vehicleAlias) {
@@ -1022,7 +1039,12 @@ async function detectVehicleFromDb(question, excludedTokens = []) {
       if (isExcludedValue(row.marca_auto, excludedTokens)) return false;
 
       const value = normalizeSearchQuery(row.marca_auto);
-      return value && normalizedQuestion.includes(` ${value} `);
+      const textValue = normalizeText(row.marca_auto);
+
+      return (
+        (value && normalizedQuestion.includes(` ${value} `)) ||
+        (textValue && normalizedTextQuestion.includes(` ${textValue} `))
+      );
     })?.marca_auto || null;
 
   if (!marca) {
@@ -1055,7 +1077,12 @@ async function detectVehicleFromDb(question, excludedTokens = []) {
       if (isExcludedValue(row.modelo_auto, excludedTokens)) return false;
 
       const value = normalizeSearchQuery(row.modelo_auto);
-      return value && normalizedQuestion.includes(` ${value} `);
+      const textValue = normalizeText(row.modelo_auto);
+
+      return (
+        (value && normalizedQuestion.includes(` ${value} `)) ||
+        (textValue && normalizedTextQuestion.includes(` ${textValue} `))
+      );
     })?.modelo_auto || null;
 
   if (!modelo) {
@@ -1067,6 +1094,10 @@ async function detectVehicleFromDb(question, excludedTokens = []) {
         break;
       }
     }
+  }
+
+  if (isInvalidModelDetectedFromTechnicalMeasurement(question, modelo)) {
+    modelo = null;
   }
 
   return { marca, modelo };

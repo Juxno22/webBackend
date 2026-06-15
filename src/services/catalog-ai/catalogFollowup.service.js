@@ -95,6 +95,47 @@ function buildMissingVehicleFields(intent = {}, { includeMotor = false } = {}) {
     return missing;
 }
 
+function describeVehicleBase(intent = {}) {
+    return [intent.marca_auto, intent.modelo_auto, intent.anio]
+        .filter(Boolean)
+        .join(" ")
+        .trim();
+}
+
+function buildVehicleMissingQuestions(intent = {}, missing = []) {
+    const missingSet = new Set(missing);
+    const questions = [];
+    const vehicleBase = describeVehicleBase(intent);
+    const modelOrBrand = [intent.marca_auto, intent.modelo_auto].filter(Boolean).join(" ").trim();
+
+    const needsMarca = missingSet.has("marca_auto");
+    const needsModelo = missingSet.has("modelo_auto");
+    const needsAnio = missingSet.has("anio");
+    const needsMotor = missingSet.has("motor");
+
+    if (needsMarca && needsModelo && needsAnio) {
+        questions.push("¿Qué marca, modelo y año es tu vehículo?");
+    } else if (needsMarca && needsModelo) {
+        questions.push("¿Qué marca y modelo es tu vehículo?");
+    } else if (needsModelo && needsAnio && intent.marca_auto) {
+        questions.push(`¿Qué modelo y año es tu ${intent.marca_auto}?`);
+    } else if (needsMarca && needsAnio && intent.modelo_auto) {
+        questions.push(`¿Qué marca y año es tu ${intent.modelo_auto}?`);
+    } else if (needsMarca) {
+        questions.push("¿Qué marca es tu vehículo?");
+    } else if (needsModelo) {
+        questions.push(intent.marca_auto ? `¿Qué modelo es tu ${intent.marca_auto}?` : "¿Qué modelo es tu vehículo?");
+    } else if (needsAnio) {
+        questions.push(modelOrBrand ? `¿Qué año es tu ${modelOrBrand}?` : "¿Qué año es tu vehículo?");
+    }
+
+    if (needsMotor) {
+        questions.push(vehicleBase ? `¿Qué motor trae tu ${vehicleBase}?` : "¿Qué motor trae?");
+    }
+
+    return questions;
+}
+
 function compactMissingVehicle(missing = []) {
     const missingSet = new Set(missing);
 
@@ -139,27 +180,18 @@ function buildDiagnosticFollowup({ intent = {} } = {}) {
     const symptomKeys = getSymptomKeys(intent);
     const level = intent.nivel_usuario || "INTERMEDIO";
     const hasFanNotWorking = symptomKeys.includes("FAN_NOT_WORKING");
-    const missingVehicle = compactMissingVehicle(
-        buildMissingVehicleFields(intent, {
-            includeMotor: level === "MECANICO",
-        })
-    );
+    const missingVehicleFields = buildMissingVehicleFields(intent, {
+        includeMotor: level === "MECANICO",
+    });
+    const missingVehicle = compactMissingVehicle(missingVehicleFields);
 
     const hasOverheat = symptomKeys.includes("COOLING_OVERHEAT");
     const hasLeak = symptomKeys.includes("COOLING_LEAK");
     const hasNoStart = symptomKeys.includes("NO_START");
 
-    const preguntas = [];
-
-    if (!hasCompleteBasicVehicle(intent)) {
-        preguntas.push("¿Qué marca, modelo y año es tu vehículo?");
-    } else if (!hasValue(intent.motor) && level !== "PRINCIPIANTE") {
-        preguntas.push("¿Qué motor trae?");
-    }
-
-    if (level === "MECANICO" && !hasValue(intent.motor)) {
-        preguntas.push("¿Qué motor trae?");
-    }
+    const preguntas = [
+        ...buildVehicleMissingQuestions(intent, missingVehicleFields),
+    ];
 
     if (hasFanNotWorking) {
         preguntas.push("¿El ventilador no prende nunca, solo prende con clima o prende muy tarde?");
@@ -177,11 +209,7 @@ function buildDiagnosticFollowup({ intent = {} } = {}) {
         requiereSeguimiento: true,
         bloqueante: true,
         siguienteAccion: "ASK_DIAGNOSTIC_DETAILS",
-        datosFaltantes: missingVehicle.length
-            ? missingVehicle
-            : hasOverheat || hasLeak || hasNoStart
-                ? ["detalle_sintoma"]
-                : ["detalle_sintoma"],
+        datosFaltantes: missingVehicle.length ? missingVehicle : ["detalle_sintoma"],
         preguntas,
         respuestasRapidas: hasFanNotWorking
             ? [
@@ -233,11 +261,10 @@ function buildProductSearchFollowup({ intent = {}, products = [] } = {}) {
         });
     }
 
-    const missingVehicle = compactMissingVehicle(
-        buildMissingVehicleFields(intent, {
-            includeMotor: true,
-        })
-    );
+    const missingVehicleFields = buildMissingVehicleFields(intent, {
+        includeMotor: true,
+    });
+    const missingVehicle = compactMissingVehicle(missingVehicleFields);
 
     const missing = [];
 
@@ -246,6 +273,8 @@ function buildProductSearchFollowup({ intent = {}, products = [] } = {}) {
     }
 
     missing.push(...missingVehicle);
+
+    const vehicleQuestions = buildVehicleMissingQuestions(intent, missingVehicleFields);
 
     return makeFollowup({
         requiereSeguimiento: missing.length > 0,
@@ -258,12 +287,7 @@ function buildProductSearchFollowup({ intent = {}, products = [] } = {}) {
             missing.includes("pieza")
                 ? "¿Qué pieza necesitas buscar?"
                 : null,
-            missing.includes("vehiculo")
-                ? "¿Qué marca, modelo y año es tu vehículo?"
-                : null,
-            missing.includes("motor")
-                ? "¿Qué motor trae?"
-                : null,
+            ...vehicleQuestions,
         ].filter(Boolean),
         respuestasRapidas: missing.includes("pieza")
             ? COOLING_PART_SUGGESTIONS
@@ -272,19 +296,17 @@ function buildProductSearchFollowup({ intent = {}, products = [] } = {}) {
 }
 
 function buildCompatibilityFollowup({ intent = {}, products = [] } = {}) {
-    const missing = [];
-
-    if (!hasCompleteBasicVehicle(intent)) {
-        missing.push("vehiculo");
-    }
-
-    if (!hasValue(intent.motor)) {
-        missing.push("motor");
-    }
+    const missingVehicleFields = buildMissingVehicleFields(intent, {
+        includeMotor: true,
+    });
+    const missingVehicle = compactMissingVehicle(missingVehicleFields);
+    const missing = [...missingVehicle];
 
     if (!hasPartNumber(intent) && !hasProductTerm(intent) && products.length === 0) {
         missing.push("pieza_o_codigo");
     }
+
+    const vehicleQuestions = buildVehicleMissingQuestions(intent, missingVehicleFields);
 
     return makeFollowup({
         requiereSeguimiento: missing.length > 0,
@@ -297,12 +319,7 @@ function buildCompatibilityFollowup({ intent = {}, products = [] } = {}) {
             missing.includes("pieza_o_codigo")
                 ? "¿Qué pieza o código quieres validar?"
                 : null,
-            missing.includes("vehiculo")
-                ? "¿Para qué marca, modelo y año lo quieres validar?"
-                : null,
-            missing.includes("motor")
-                ? "¿Qué motor trae?"
-                : null,
+            ...vehicleQuestions,
         ].filter(Boolean),
         respuestasRapidas: [
             "Validar por aplicación",
@@ -360,9 +377,14 @@ function buildStockFollowup({ intent = {} } = {}) {
         missing.push("pieza");
     }
 
-    if (!hasCompleteBasicVehicle(intent)) {
-        missing.push("vehiculo");
-    }
+    const missingVehicleFields = buildMissingVehicleFields(intent, {
+        includeMotor: false,
+    });
+    const missingVehicle = compactMissingVehicle(missingVehicleFields);
+
+    missing.push(...missingVehicle);
+
+    const vehicleQuestions = buildVehicleMissingQuestions(intent, missingVehicleFields);
 
     return makeFollowup({
         requiereSeguimiento: true,
@@ -373,9 +395,7 @@ function buildStockFollowup({ intent = {} } = {}) {
             missing.includes("pieza")
                 ? "¿Qué pieza quieres validar?"
                 : null,
-            missing.includes("vehiculo")
-                ? "¿Para qué vehículo es?"
-                : null,
+            ...vehicleQuestions,
         ].filter(Boolean),
         respuestasRapidas: [
             "Validar disponibilidad",

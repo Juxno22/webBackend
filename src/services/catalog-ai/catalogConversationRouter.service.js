@@ -70,6 +70,48 @@ function isConceptComparison(question) {
   );
 }
 
+function hasExplicitCatalogSearchLanguage(question) {
+  const text = normalizeText(question);
+
+  return (
+    /\bBUSCO\b/.test(text) ||
+    /\bBUSCAR\b/.test(text) ||
+    /\bNECESITO\b/.test(text) ||
+    /\bOCUPO\b/.test(text) ||
+    /\bQUIERO\b/.test(text) ||
+    /\bCOTIZAR\b/.test(text) ||
+    /\bCOTIZARME\b/.test(text) ||
+    /\bCOTIZAME\b/.test(text) ||
+    /\bCOTÍZAME\b/.test(text) ||
+    /\bTIENES\b/.test(text) ||
+    /\bTIENEN\b/.test(text) ||
+    /\bTENDRAS\b/.test(text) ||
+    /\bTENDRÁS\b/.test(text) ||
+    /\bMANEJAN\b/.test(text) ||
+    /\bMANEJAS\b/.test(text) ||
+    /\bVENDEN\b/.test(text) ||
+    /\bVENDES\b/.test(text)
+  );
+}
+
+function hasTechnicalCatalogContext(intent = {}) {
+  return (
+    hasAny(intent.medidas_detectadas) ||
+    hasAny(intent.numero_parte_tokens) ||
+    hasVehicleData(intent)
+  );
+}
+
+function isTechnicalCatalogSearch(question, intent = {}) {
+  if (isConceptComparison(question)) return false;
+
+  return (
+    hasExplicitCatalogSearchLanguage(question) &&
+    hasProductData(intent) &&
+    hasTechnicalCatalogContext(intent)
+  );
+}
+
 function mentionsMultipleProductConcepts(intent = {}) {
   const terms = Array.isArray(intent.terminos_producto_detectados)
     ? intent.terminos_producto_detectados.map((item) => normalizeText(item))
@@ -85,6 +127,7 @@ function mentionsMultipleProductConcepts(intent = {}) {
       if (term.includes("MANGUERA")) return "MANGUERA";
       if (term.includes("VENTILADOR") || term.includes("MOTOVENTILADOR")) return "VENTILADOR";
       if (term.includes("SENSOR") || term.includes("BULBO")) return "SENSOR";
+      if (term.includes("POLEA") || term.includes("PULLEY")) return "POLEA";
       return term;
     })
   );
@@ -156,16 +199,16 @@ export function routeCatalogConversation({ question, intent = {}, sessionContext
   if (hasProductComparisonContext(question, intent)) {
     return {
       mode: CATALOG_CONVERSATION_MODES.PRODUCT_COMPARISON,
-      reason: "PRODUCT_COMPARISON_REQUEST",
+      reason: "PRODUCT_COMPARISON_WITH_CATALOG_CONTEXT",
       shouldSearchCatalog: true,
       requiresMoreData: false,
     };
   }
 
-  if (hasProductComparisonContext(question, intent)) {
+  if (isTechnicalCatalogSearch(question, intent)) {
     return {
-      mode: CATALOG_CONVERSATION_MODES.PRODUCT_COMPARISON,
-      reason: "PRODUCT_COMPARISON_WITH_CATALOG_CONTEXT",
+      mode: CATALOG_CONVERSATION_MODES.PRODUCT_SEARCH,
+      reason: "TECHNICAL_PRODUCT_SEARCH_REQUEST",
       shouldSearchCatalog: true,
       requiresMoreData: false,
     };
