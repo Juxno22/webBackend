@@ -54,16 +54,27 @@ export function buildCandidateWhere(intent) {
   }
 
   if (strictProductFamilyTokens.length > 0) {
+    const allowDescriptionSearch = isPulleySearchIntent(intent);
+
     for (const token of strictProductFamilyTokens) {
       const like = `%${token}%`;
 
-      // Búsqueda fuerte: familia/categoría.
-      // Esto evita que "TUBO ... A BOMBA DE AGUA" gane como si fuera bomba.
       productConditions.push("UPPER(COALESCE(p.familia, '')) LIKE ?");
       params.push(like);
 
       productConditions.push("UPPER(COALESCE(c.nombre, '')) LIKE ?");
       params.push(like);
+
+      if (allowDescriptionSearch) {
+        productConditions.push("UPPER(COALESCE(p.descripcion, '')) LIKE ?");
+        params.push(like);
+
+        productConditions.push("UPPER(COALESCE(p.descripcion_web, '')) LIKE ?");
+        params.push(like);
+
+        productConditions.push("UPPER(COALESCE(pat.valor_texto, '')) LIKE ?");
+        params.push(like);
+      }
     }
   } else {
     for (const token of productTokens) {
@@ -220,6 +231,24 @@ function hasVehicleFilters(intent = {}) {
   );
 }
 
+function isPulleySearchIntent(intent = {}) {
+  const terms = [
+    ...(Array.isArray(intent.terminos_producto_detectados)
+      ? intent.terminos_producto_detectados
+      : []),
+    ...(Array.isArray(intent.product_query_tokens)
+      ? intent.product_query_tokens
+      : []),
+    ...(Array.isArray(intent.strict_product_family_tokens)
+      ? intent.strict_product_family_tokens
+      : []),
+  ]
+    .map((item) => normalizeText(item))
+    .join(" ");
+
+  return /\bPOLEA\b/.test(terms) || /\bPOLEAS\b/.test(terms);
+}
+
 function isNumericMeasurement(measurement = {}) {
   return (
     measurement.tipo === "NUMERIC_ATTRIBUTE" &&
@@ -337,6 +366,33 @@ function buildRelaxedMeasurementSearchVariants(intent = {}) {
         motor: null,
         motores_posibles: [],
         medidas_detectadas: [primaryMeasurement],
+      },
+    });
+  }
+  
+  variants.push({
+    reason: "PRODUCT_ONLY_WITHOUT_MEASUREMENT_FILTERS",
+    label: "pieza sin filtro duro de medidas",
+    relaxVehicle: false,
+    intent: {
+      ...intent,
+      medidas_detectadas: [],
+    },
+  });
+
+  if (hasVehicleFilters(intent)) {
+    variants.push({
+      reason: "PRODUCT_ONLY_WITHOUT_MEASUREMENTS_OR_VEHICLE_FILTER",
+      label: "pieza sin filtro duro de medidas ni vehículo",
+      relaxVehicle: true,
+      intent: {
+        ...intent,
+        marca_auto: null,
+        modelo_auto: null,
+        anio: null,
+        motor: null,
+        motores_posibles: [],
+        medidas_detectadas: [],
       },
     });
   }

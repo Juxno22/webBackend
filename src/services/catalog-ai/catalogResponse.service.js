@@ -48,11 +48,30 @@ export function buildLocalAnswer({ intent, products }) {
 
   const relaxedMeasurementSearch = intent.busqueda_medidas_relajada || null;
 
-  const relaxedMeasurementText = relaxedMeasurementSearch?.activa
-    ? relaxedMeasurementSearch.vehiculo_relajado
-      ? `No encontré coincidencia exacta con todas las medidas y aplicación vehicular; abrí la búsqueda por medida principal (${describeMeasurementFilters([relaxedMeasurementSearch.medida_filtrada])}) sin usar el vehículo como filtro duro.`
-      : `No encontré coincidencia exacta con todas las medidas; abrí la búsqueda por medida principal (${describeMeasurementFilters([relaxedMeasurementSearch.medida_filtrada])}).`
-    : "";
+  const relaxedMeasurementText = (() => {
+    if (!relaxedMeasurementSearch?.activa) return "";
+
+    const filteredMeasurementText = relaxedMeasurementSearch.medida_filtrada
+      ? describeMeasurementFilters([relaxedMeasurementSearch.medida_filtrada])
+      : "";
+
+    if (relaxedMeasurementSearch.motivo === "PRODUCT_ONLY_WITHOUT_MEASUREMENT_FILTERS") {
+      return "No encontré coincidencia exacta con todas las medidas; abrí la búsqueda por pieza y vehículo sin usar las medidas como filtro duro.";
+    }
+
+    if (
+      relaxedMeasurementSearch.motivo ===
+      "PRODUCT_ONLY_WITHOUT_MEASUREMENTS_OR_VEHICLE_FILTER"
+    ) {
+      return "No encontré coincidencia exacta con todas las medidas ni con la aplicación vehicular; abrí la búsqueda solo por pieza para mostrar opciones orientativas del catálogo.";
+    }
+
+    if (relaxedMeasurementSearch.vehiculo_relajado) {
+      return `No encontré coincidencia exacta con todas las medidas y aplicación vehicular; abrí la búsqueda por medida principal${filteredMeasurementText ? ` (${filteredMeasurementText})` : ""} sin usar el vehículo como filtro duro.`;
+    }
+
+    return `No encontré coincidencia exacta con todas las medidas; abrí la búsqueda por medida principal${filteredMeasurementText ? ` (${filteredMeasurementText})` : ""}.`;
+  })();
 
   const conditionText = Array.isArray(intent.condiciones_detectadas)
     ? intent.condiciones_detectadas.map((item) => item.label).join(" ")
