@@ -115,6 +115,12 @@ const STOP_WORDS = new Set([
   "AGUA",
   "SEA",
   "SER",
+  "LLEVA",
+  "LLEVO",
+  "LLEVAR",
+  "SERA",
+  "SERÁ",
+  "PUEDE",
 ]);
 
 const NON_CATALOG_PATTERNS = [
@@ -538,6 +544,41 @@ function cleanString(value) {
   return String(value).trim();
 }
 
+const BLOCKED_PART_NUMBER_WORDS = new Set([
+  "LLEVA",
+  "LLEVO",
+  "LLEVAR",
+  "PIEZA",
+  "PIEZAS",
+  "CARRO",
+  "COCHE",
+  "AUTO",
+  "VEHICULO",
+  "VEHÍCULO",
+  "BUSCO",
+  "BUSCAR",
+  "QUIERO",
+  "NECESITO",
+  "OCUPO",
+  "TIENE",
+  "TENGO",
+  "SERA",
+  "SERÁ",
+  "PUEDE",
+  "PARA",
+]);
+
+function isBlockedPartNumberWord(value) {
+  const token = normalizeText(value);
+
+  return (
+    !token ||
+    STOP_WORDS.has(token) ||
+    INVALID_CODES.has(token) ||
+    BLOCKED_PART_NUMBER_WORDS.has(token)
+  );
+}
+
 function isValidPublicCode(value) {
   const clean = normalizeText(value);
   return clean !== "" && !INVALID_CODES.has(clean);
@@ -586,9 +627,16 @@ function extractContextualPartNumbers(question) {
 
     while ((match = pattern.exec(text)) !== null) {
       if (match[1]) {
-        const code = normalizePartNumber(match[1]);
+        const rawValue = match[1];
+        const code = normalizePartNumber(rawValue);
 
-        if (code && code.length >= 2 && !INVALID_CODES.has(code)) {
+        if (
+          code &&
+          code.length >= 2 &&
+          !INVALID_CODES.has(code) &&
+          !isBlockedPartNumberWord(code) &&
+          !isMeasurementLikePartToken(rawValue)
+        ) {
           codes.push(code);
         }
       }
@@ -603,6 +651,8 @@ function looksLikePartNumber(rawToken) {
   const token = normalizePartNumber(raw);
 
   if (!token) return false;
+
+  if (isBlockedPartNumberWord(token)) return false;
 
   // Evita años cuando vienen solos. Si el usuario escribió "código 2000",
   // eso se captura aparte en extractContextualPartNumbers().

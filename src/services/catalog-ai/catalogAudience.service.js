@@ -1,5 +1,28 @@
 import { normalizeText } from "../../utils/normalize.js";
 
+const FAKE_PART_TOKENS = new Set([
+  "LLEVA",
+  "LLEVO",
+  "LLEVAR",
+  "PIEZA",
+  "CARRO",
+  "COCHE",
+  "AUTO",
+  "VEHICULO",
+  "VEHÍCULO",
+  "BUSCO",
+  "BUSCAR",
+  "QUIERO",
+  "NECESITO",
+  "OCUPO",
+  "TIENE",
+  "TENGO",
+  "SERA",
+  "SERÁ",
+  "PUEDE",
+  "PARA",
+]);
+
 const MECHANIC_PATTERNS = [
   /\bOEM\b/,
   /\bNO\s+DE\s+PARTE\b/,
@@ -30,7 +53,8 @@ const BEGINNER_PATTERNS = [
   /\bNO\s+S[EÉ]\s+C[ÓO]MO\b/,
   /\bNO\s+TENGO\s+IDEA\b/,
   /\bNO\s+S[EÉ]\s+QU[EÉ]\s+PIEZA\b/,
-  /\bMI\s+(CARRO|COCHE|AUTO)\b/,
+  /\bNO\s+S[EÉ]\s+QU[EÉ]\s+LLEVA\b/,
+  /\bMI\s+(CARRO|COCHE|AUTO|VEH[IÍ]CULO)\b/,
   /\bSE\s+CALIENTA\b/,
   /\bTIRA\s+(AGUA|L[IÍ]QUIDO|ANTICONGELANTE)\b/,
   /\bHACE\s+RUIDO\b/,
@@ -63,14 +87,44 @@ function countMatches(text, patterns = []) {
   }, 0);
 }
 
+function isMeaningfulPartToken(token) {
+  const value = normalizeText(token);
+
+  if (!value || FAKE_PART_TOKENS.has(value)) return false;
+
+  // Código real normalmente trae letras+números, guiones, diagonal o formato de parte.
+  const hasLetter = /[A-Z]/.test(value);
+  const hasDigit = /[0-9]/.test(value);
+  const hasCodeSymbol = /[-/_.]/.test(value);
+
+  if (hasLetter && hasDigit && value.length >= 3) return true;
+  if (hasCodeSymbol && value.length >= 4) return true;
+
+  return false;
+}
+
+function hasStrongMechanicLanguage(text) {
+  return (
+    /\b(OEM|CRUCE|CRUCES|APLICACI[ÓO]N|PSI|CANALES|MM|MIL[IÍ]METROS|SOHC|DOHC|16V|8V)\b/.test(text) ||
+    /\bTEMPERATURA\s+DE\s+APERTURA\b/.test(text) ||
+    /\bMOTOR\s+[0-9]\.[0-9]\b/.test(text) ||
+    /\b[0-9]\.[0-9]\s*(L|LT|LTS|LITROS?)\b/.test(text)
+  );
+}
+
 export function detectAudienceLevel({ question, intent = {} } = {}) {
   const text = normalizeText(question);
 
-  const mechanicScore =
-    countMatches(text, MECHANIC_PATTERNS) +
-    (Array.isArray(intent.numero_parte_tokens) && intent.numero_parte_tokens.length ? 2 : 0) +
-    (Array.isArray(intent.medidas_detectadas) && intent.medidas_detectadas.length ? 2 : 0) +
-    (intent.motor ? 1 : 0);
+  const meaningfulPartTokens = Array.isArray(intent.numero_parte_tokens)
+    ? intent.numero_parte_tokens.filter(isMeaningfulPartToken)
+    : [];
+
+  const hasMeasurements =
+    Array.isArray(intent.medidas_detectadas) &&
+    intent.medidas_detectadas.length > 0;
+
+  const hasMotor = Boolean(intent.motor);
+  const strongMechanicLanguage = hasStrongMechanicLanguage(text);
 
   const beginnerScore =
     countMatches(text, BEGINNER_PATTERNS) +
@@ -82,7 +136,31 @@ export function detectAudienceLevel({ question, intent = {} } = {}) {
     (intent.modelo_auto ? 1 : 0) +
     (intent.anio ? 1 : 0);
 
-  if (mechanicScore >= 2) {
+  const mechanicScore =
+    countMatches(text, MECHANIC_PATTERNS) +
+    (meaningfulPartTokens.length ? 2 : 0) +
+    (hasMeasurements ? 2 : 0) +
+    (hasMotor ? 1 : 0);
+
+  // Regla fuerte: si el cliente claramente no sabe qué pieza lleva,
+  // no lo clasifiques como mecánico por tokens accidentales.
+  if (beginnerScore >= 3 && !strongMechanicLanguage && !hasMeasurements && !meaningfulPartTokens.length) {
+    return {
+      nivel_usuario: "PRINCIPIANTE",
+      tono_respuesta: "SIMPLE_GUIADO",
+      score: {
+        mecanico: mechanicScore,
+        intermedio: intermediateScore,
+        principiante: beginnerScore,
+      },
+    };
+  }
+
+  // Mecánico solo si hay evidencia técnica real, no por palabras comunes.
+  if (
+    mechanicScore >= 2 &&
+    (strongMechanicLanguage || hasMeasurements || meaningfulPartTokens.length)
+  ) {
     return {
       nivel_usuario: "MECANICO",
       tono_respuesta: "TECNICO",
@@ -94,7 +172,7 @@ export function detectAudienceLevel({ question, intent = {} } = {}) {
     };
   }
 
-  if (beginnerScore >= 2 && mechanicScore === 0) {
+  if (beginnerScore >= 2) {
     return {
       nivel_usuario: "PRINCIPIANTE",
       tono_respuesta: "SIMPLE_GUIADO",
