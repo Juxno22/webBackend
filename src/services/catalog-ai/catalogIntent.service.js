@@ -277,6 +277,27 @@ const SYMPTOM_RULES = [
     tokens: [],
     searchable: false,
   },
+  {
+    key: "FAN_NOT_WORKING",
+    label: "posible falla de ventilador o motoventilador",
+    patterns: [
+      /\bNO\s+PRENDE\s+EL\s+VENTILADOR\b/,
+      /\bNO\s+ENCIENDE\s+EL\s+VENTILADOR\b/,
+      /\bVENTILADOR\s+NO\s+PRENDE\b/,
+      /\bVENTILADOR\s+NO\s+ENCIENDE\b/,
+      /\bNO\s+PRENDE\s+EL\s+MOTOVENTILADOR\b/,
+      /\bMOTOVENTILADOR\s+NO\s+PRENDE\b/,
+      /\bABANICO\s+NO\s+PRENDE\b/,
+    ],
+    tokens: [
+      "VENTILADOR",
+      "MOTOVENTILADOR",
+      "BULBO",
+      "SENSOR TEMPERATURA",
+      "RADIADOR",
+    ],
+    searchable: true,
+  },
 ];
 // Extensiones controladas para entrenamiento del buscador.
 [
@@ -1024,8 +1045,17 @@ function detectSymptomRules(question) {
   const text = normalizeText(question);
   const negatedOverheat = hasNegatedOverheat(question);
 
+  const mentionsFan =
+    /\bVENTILADOR\b/.test(text) ||
+    /\bMOTOVENTILADOR\b/.test(text) ||
+    /\bABANICO\b/.test(text);
+
   return SYMPTOM_RULES.filter((rule) => {
     if (rule.key === "COOLING_OVERHEAT" && negatedOverheat) {
+      return false;
+    }
+
+    if (rule.key === "NO_START" && mentionsFan) {
       return false;
     }
 
