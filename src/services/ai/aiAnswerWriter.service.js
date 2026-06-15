@@ -81,6 +81,7 @@ async function tryOpenRouterAnswer({
 
   const payload = extractPayloadFromMessages(messages);
   const allowedCodes = extractAllowedCodes(payload);
+  const isAdvisor = String(externalPrefix).includes("ASESOR");
 
   try {
     const response = await callOpenRouter({
@@ -103,9 +104,6 @@ async function tryOpenRouterAnswer({
         response: null,
       };
     }
-
-    const payload = extractPayloadFromMessages(messages);
-    const isAdvisor = String(externalPrefix).includes("ASESOR");
 
     return {
       service: `${externalPrefix}:${config.model}`,
@@ -156,9 +154,7 @@ async function tryMultiProviderAdvisorAnswer({ messages = [] } = {}) {
       response: null,
     };
   }
-
-  const payload = extractPayloadFromMessages(messages);
-
+  
   return {
     service: `MULTI_ASESOR:${result.service}`,
     response: polishAdvisorResponse({
