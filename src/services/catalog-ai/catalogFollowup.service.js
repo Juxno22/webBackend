@@ -208,14 +208,8 @@ function buildProductSearchFollowup({ intent = {}, products = [] } = {}) {
       bloqueante: false,
       siguienteAccion: "SHOW_PRODUCTS",
       datosFaltantes: [],
-      preguntas: [
-        "¿Quieres que agreguemos alguna opción a cotización?",
-      ],
-      respuestasRapidas: [
-        "Ver detalle",
-        "Agregar a cotización",
-        "Validar con ventas",
-      ],
+      preguntas: [],
+      respuestasRapidas: [],
     });
   }
 
@@ -380,6 +374,20 @@ export function buildCatalogFollowup({
   const detectedMode = getMode(intent, mode);
   const gateReason = intent.gate_reason || "";
   const normalizedQuestion = normalizeText(question);
+  const hasProducts = Array.isArray(products) && products.length > 0;
+
+  // Si ya hay productos recomendados, no generamos respuestas rápidas.
+  // Las acciones reales se muestran en cada tarjeta: ver detalle y agregar.
+  if (hasProducts) {
+    return makeFollowup({
+      requiereSeguimiento: false,
+      bloqueante: false,
+      siguienteAccion: "SHOW_PRODUCTS",
+      datosFaltantes: [],
+      preguntas: [],
+      respuestasRapidas: [],
+    });
+  }
 
   if (gateReason === "SESSION_CONTEXT_RESET") {
     return makeFollowup({

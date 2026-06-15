@@ -17,7 +17,7 @@ export function buildOpenRouterMessages(messages = []) {
     "No hagas listas largas de productos.",
     "No repitas todos los códigos de productos.",
     "No uses markdown, no uses negritas con **, no uses tablas con |.",
-    "Tu respuesta debe ser de máximo 3 oraciones.",
+    "Tu respuesta debe ser de máximo 2 oraciones.",
     "Si hay productos, resume lo encontrado y pide datos faltantes si hace falta.",
     "Si intencion_detectada.excluded_vehicle_tokens contiene una marca/modelo, no presentes opciones relacionadas con esa marca/modelo.",
     "Si intencion_detectada.excluded_product_brand_tokens contiene una marca/fabricante, no afirmes que los productos son de otra marca salvo que el contexto tenga un campo explícito de marca del producto.",
@@ -171,7 +171,7 @@ export function buildAdvisorMessages(messages = []) {
     "Si falta información para comparar o validar, pide el dato faltante de forma natural.",
     "Si el usuario es principiante, explica simple. Si usa términos técnicos, responde con más precisión.",
     "No uses tablas, markdown, negritas ni listas largas.",
-    "Responde máximo 3 oraciones.",
+    "Responde máximo 2 oraciones.",
     "Siempre que aplique, aclara que ventas valida compatibilidad y disponibilidad final.",
     "Responde en español mexicano natural.",
   ].join(" ");
