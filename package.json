@@ -10,10 +10,15 @@
     "create-admin": "node scripts/createAdmin.js"
   },
   "dependencies": {
+    "@cerebras/cerebras_cloud_sdk": "^1.64.1",
+    "@google/genai": "^2.8.0",
+    "@huggingface/inference": "^4.13.19",
+    "@mistralai/mistralai": "^2.2.5",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
     "dotenv": "^17.2.0",
     "express": "^5.1.0",
+    "groq-sdk": "^1.2.1",
     "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.3",
     "morgan": "^1.10.0",
