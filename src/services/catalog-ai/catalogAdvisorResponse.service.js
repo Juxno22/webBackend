@@ -36,6 +36,7 @@ function hasTerm(intent = {}, pattern) {
 function buildDiagnosticGuideAnswer({ intent = {}, sessionContext = {} }) {
   const vehicleText = buildVehicleText(intent, sessionContext);
   const symptomKeys = getSymptomKeys(intent, sessionContext);
+  const level = intent.nivel_usuario || "INTERMEDIO";
 
   if (symptomKeys.includes("NO_START")) {
     return [
@@ -58,6 +59,26 @@ function buildDiagnosticGuideAnswer({ intent = {}, sessionContext = {} }) {
   }
 
   if (symptomKeys.includes("COOLING_OVERHEAT")) {
+
+    if (level === "MECANICO") {
+      return [
+        "Por calentamiento, revisaría flujo de anticongelante, apertura de termostato, eficiencia de radiador, presión de tapón, funcionamiento de motoventilador y posible aire en el sistema.",
+        vehicleText
+          ? `Con ${vehicleText}, conviene validar motor, temperatura de apertura, presión del tapón y aplicación exacta antes de elegir pieza.`
+          : "Pásame marca, modelo, año, motor y si el calentamiento ocurre en tráfico, subida, carretera o con A/C.",
+        "Validar aplicación y disponibilidad final antes de cotizar.",
+      ].join(" ");
+    }
+
+    if (level === "PRINCIPIANTE") {
+      return [
+        "Cuando un carro se calienta, no siempre es una sola pieza; puede ser algo del sistema de enfriamiento.",
+        "Las piezas más comunes a revisar son termostato, bomba de agua, radiador, tapón, mangueras, ventilador o sensor de temperatura.",
+        vehicleText
+          ? `Como veníamos con ${vehicleText}, dime si se calienta en tráfico, en subida, con clima o después de manejar un rato.`
+          : "Dime marca, modelo, año y motor para ayudarte a buscar la pieza correcta.",
+      ].join(" ");
+    }
     return [
       "El calentamiento puede relacionarse con termostato, bomba de agua, radiador, tapón, depósito, mangueras, ventilador o sensor de temperatura.",
       vehicleText

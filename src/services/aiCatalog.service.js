@@ -52,6 +52,7 @@ import {
   buildCompatibilityEvidence,
   buildCompatibilityExplanationLocalAnswer,
 } from "./catalog-ai/catalogCompatibility.service.js";
+import { detectAudienceLevel } from "./catalog-ai/catalogAudience.service.js";
 
 function buildEmptyResult({ intent, sessionId, context, answer, service, requiresMoreData = true }) {
   return {
@@ -397,6 +398,13 @@ export async function searchCatalogWithAi({
 
   const session = await getOrCreateSearchSession(rawSessionId);
   const rawIntent = await buildIntentWithSemanticNormalizer(cleanQuestion);
+  const audience = detectAudienceLevel({
+    question: cleanQuestion,
+    intent: rawIntent,
+  });
+  rawIntent.nivel_usuario = audience.nivel_usuario;
+  rawIntent.tono_respuesta = audience.tono_respuesta;
+  rawIntent.audience_score = audience.score;
   const ignoreSessionContext = shouldIgnoreSessionContextForQuestion(rawIntent);
 
   const intent = ignoreSessionContext

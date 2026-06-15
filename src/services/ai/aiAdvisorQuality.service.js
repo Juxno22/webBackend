@@ -92,7 +92,7 @@ function removeMarkdownNoise(text) {
     .trim();
 }
 
-function ensureCommercialClose(text, { mode } = {}) {
+function ensureCommercialClose(text, { mode, intent = {} } = {}) {
   const clean = cleanString(text);
 
   if (
@@ -109,6 +109,10 @@ function ensureCommercialClose(text, { mode } = {}) {
     mode === "PRODUCT_SEARCH";
 
   if (!shouldClose) return clean;
+
+  if (intent.nivel_usuario === "MECANICO") {
+    return `${clean} Validar aplicación, medida y disponibilidad final antes de cotizar.`;
+  }
 
   return `${clean} Ventas valida compatibilidad y disponibilidad final.`;
 }
@@ -131,8 +135,8 @@ function ensureCoolingFocus(text, { mode, intent = {} } = {}) {
 
   const hasCoolingSymptom = Array.isArray(intent.sintomas_detectados)
     ? intent.sintomas_detectados.some((item) =>
-        ["COOLING_OVERHEAT", "COOLING_LEAK"].includes(item.key)
-      )
+      ["COOLING_OVERHEAT", "COOLING_LEAK"].includes(item.key)
+    )
     : false;
 
   if (!hasCoolingSymptom) return clean;
