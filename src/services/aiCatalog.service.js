@@ -53,9 +53,19 @@ import {
   buildCompatibilityExplanationLocalAnswer,
 } from "./catalog-ai/catalogCompatibility.service.js";
 import { detectAudienceLevel } from "./catalog-ai/catalogAudience.service.js";
+import { addFollowupToCatalogResult } from "./catalog-ai/catalogFollowup.service.js";
 
-function buildEmptyResult({ intent, sessionId, context, answer, service, requiresMoreData = true }) {
-  return {
+function buildEmptyResult({
+  intent,
+  sessionId,
+  context,
+  answer,
+  service,
+  requiresMoreData = true,
+  question = "",
+  mode = null,
+}) {
+  const result = {
     intencion: intent,
     session_id: sessionId,
     contexto_corto: context || {},
@@ -66,6 +76,15 @@ function buildEmptyResult({ intent, sessionId, context, answer, service, require
     productos: [],
     requiere_mas_datos: requiresMoreData,
   };
+
+  if (!question) return result;
+
+  return addFollowupToCatalogResult(result, {
+    question,
+    intent,
+    mode: mode || intent?.modo_conversacion || intent?.modo_busqueda,
+    products: [],
+  });
 }
 
 async function buildIntentWithSemanticNormalizer(cleanQuestion) {
@@ -169,6 +188,8 @@ async function answerAdvisorMode({
     answer,
     service,
     requiresMoreData: route.requiresMoreData !== false,
+    question: cleanQuestion,
+    mode: route.mode,
   });
 }
 
@@ -277,16 +298,24 @@ async function runProductSearch({ cleanQuestion, effectiveIntent, origen }) {
     origen,
   });
 
-  return {
-    intencion: effectiveIntent,
-    session_id: effectiveIntent.session_id,
-    contexto_corto: effectiveIntent.contexto_corto || {},
-    respuesta: answer,
-    servicio_ia: service,
-    total_candidatos: scored.length,
-    total_recomendados: recommended.length,
-    productos: recommended,
-  };
+  return addFollowupToCatalogResult(
+    {
+      intencion: effectiveIntent,
+      session_id: effectiveIntent.session_id,
+      contexto_corto: effectiveIntent.contexto_corto || {},
+      respuesta: answer,
+      servicio_ia: service,
+      total_candidatos: scored.length,
+      total_recomendados: recommended.length,
+      productos: recommended,
+    },
+    {
+      question: cleanQuestion,
+      intent: effectiveIntent,
+      mode: effectiveIntent.modo_conversacion || effectiveIntent.modo_busqueda,
+      products: recommended,
+    }
+  );
 }
 
 export async function searchCatalogWithAi({
@@ -320,20 +349,30 @@ export async function searchCatalogWithAi({
       origen,
     });
 
-    return {
-      ok: true,
-      session_id: sessionId,
-      intencion: {
-        gate_reason: "SESSION_CONTEXT_RESET",
+    return addFollowupToCatalogResult(
+      {
+        ok: true,
+        session_id: sessionId,
+        intencion: {
+          gate_reason: "SESSION_CONTEXT_RESET",
+        },
+        respuesta: answer,
+        servicio_ia: "LOCAL_CONTROLADO",
+        total_candidatos: 0,
+        total_recomendados: 0,
+        productos: [],
+        requiere_mas_datos: true,
+        contexto_corto: {},
       },
-      respuesta: answer,
-      servicio_ia: "LOCAL_CONTROLADO",
-      total_candidatos: 0,
-      total_recomendados: 0,
-      productos: [],
-      requiere_mas_datos: true,
-      contexto_corto: {},
-    };
+      {
+        question: cleanQuestion,
+        intent: {
+          gate_reason: "SESSION_CONTEXT_RESET",
+        },
+        mode: "SESSION_CONTEXT_RESET",
+        products: [],
+      }
+    );
   }
 
   if (asksForFutureStock(cleanQuestion)) {
@@ -363,6 +402,8 @@ export async function searchCatalogWithAi({
       answer,
       service: "LOCAL_CONTROLADO",
       requiresMoreData: true,
+      question: cleanQuestion,
+      mode: CATALOG_CONVERSATION_MODES.STOCK_QUERY,
     });
   }
 
@@ -393,6 +434,8 @@ export async function searchCatalogWithAi({
       answer,
       service: "LOCAL_CONTROLADO",
       requiresMoreData: true,
+      uestion: cleanQuestion,
+      mode: CATALOG_CONVERSATION_MODES.STOCK_QUERY,
     });
   }
 
@@ -511,18 +554,22 @@ export async function searchCatalogWithAi({
       origen,
     });
 
+    const blockedIntent = {
+      ...intent,
+      gate_reason: gate.reason,
+      modo_conversacion: route.mode,
+      conversation_route: route,
+    };
+
     return buildEmptyResult({
-      intent: {
-        ...intent,
-        gate_reason: gate.reason,
-        modo_conversacion: route.mode,
-        conversation_route: route,
-      },
+      intent: blockedIntent,
       sessionId: session.session_id,
       context: updatedContext,
       answer,
       service,
       requiresMoreData: true,
+      question: cleanQuestion,
+      mode: route.mode,
     });
   }
 
