@@ -46,6 +46,14 @@ export function buildLocalAnswer({ intent, products }) {
       ? describeMeasurementFilters(intent.medidas_detectadas)
       : "";
 
+  const relaxedMeasurementSearch = intent.busqueda_medidas_relajada || null;
+
+  const relaxedMeasurementText = relaxedMeasurementSearch?.activa
+    ? relaxedMeasurementSearch.vehiculo_relajado
+      ? `No encontré coincidencia exacta con todas las medidas y aplicación vehicular; abrí la búsqueda por medida principal (${describeMeasurementFilters([relaxedMeasurementSearch.medida_filtrada])}) sin usar el vehículo como filtro duro.`
+      : `No encontré coincidencia exacta con todas las medidas; abrí la búsqueda por medida principal (${describeMeasurementFilters([relaxedMeasurementSearch.medida_filtrada])}).`
+    : "";
+
   const conditionText = Array.isArray(intent.condiciones_detectadas)
     ? intent.condiciones_detectadas.map((item) => item.label).join(" ")
     : "";
@@ -109,13 +117,14 @@ export function buildLocalAnswer({ intent, products }) {
 
   return [
     intro,
+    relaxedMeasurementText,
     `La opción más fuerte es ${top.codigo_andyfers || top.codigo_importacion}: ${top.descripcion}.`,
     measurementText ? `Tomé como referencia técnica: ${measurementText}.` : "",
     `Compatibilidad estimada: ${top.compatibilidad_estimada}%.`,
     conditionText ? `Nota: ${conditionText}` : "",
     preferenceText,
     productBrandExclusionText,
-    "Esta recomendación es orientativa. Ventas debe validar compatibilidad y disponibilidad final antes de confirmar la cotización.",
+    "Esta recomendación es orientativa. Ventas debe validar compatibilidad, medidas físicas y disponibilidad final antes de confirmar la cotización.",
   ]
     .filter(Boolean)
     .join(" ");

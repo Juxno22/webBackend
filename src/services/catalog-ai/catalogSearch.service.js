@@ -211,7 +211,153 @@ export function buildCandidateWhere(intent) {
   };
 }
 
-export async function searchCandidates(intent) {
+function hasVehicleFilters(intent = {}) {
+  return Boolean(
+    intent.marca_auto ||
+    intent.modelo_auto ||
+    intent.anio ||
+    intent.motor
+  );
+}
+
+function isNumericMeasurement(measurement = {}) {
+  return (
+    measurement.tipo === "NUMERIC_ATTRIBUTE" &&
+    measurement.aplicar_filtro !== false &&
+    Number.isFinite(Number(measurement.valor_numero)) &&
+    measurement.atributo_normalizado
+  );
+}
+
+function isPrimaryPulleyDimension(measurement = {}) {
+  const key = normalizeText(measurement.atributo_normalizado);
+
+  return [
+    "DIAMETRO",
+    "DIAMETRO EXTERIOR",
+    "DIAMETRO MAYOR",
+    "DIAMETRO MENOR",
+  ].includes(key);
+}
+
+function relaxMeasurementTolerance(measurement = {}) {
+  const key = normalizeText(measurement.atributo_normalizado);
+  const currentTolerance = Number(measurement.tolerancia);
+
+  let relaxedTolerance = Number.isFinite(currentTolerance)
+    ? currentTolerance
+    : 0.75;
+
+  if (
+    [
+      "DIAMETRO",
+      "DIAMETRO EXTERIOR",
+      "DIAMETRO MAYOR",
+      "DIAMETRO MENOR",
+    ].includes(key)
+  ) {
+    relaxedTolerance = Math.max(relaxedTolerance, 3);
+  } else if (
+    [
+      "ANCHO",
+      "ANCHO TOTAL",
+      "ANCHO DE PISTA",
+      "EJE",
+      "DIAMETRO BUJE",
+      "DIAMETRO INTERIOR",
+    ].includes(key)
+  ) {
+    relaxedTolerance = Math.max(relaxedTolerance, 1.5);
+  }
+
+  if (key === "CANALES") {
+    relaxedTolerance = 0;
+  }
+
+  return {
+    ...measurement,
+    tolerancia: relaxedTolerance,
+    busqueda_relajada: true,
+  };
+}
+
+function getPrimaryMeasurementForRelaxedSearch(intent = {}) {
+  const measurements = Array.isArray(intent.medidas_detectadas)
+    ? intent.medidas_detectadas.filter(isNumericMeasurement)
+    : [];
+
+  if (!measurements.length) return null;
+
+  const primaryDimension = measurements
+    .sort((a, b) => Number(b.prioridad || 0) - Number(a.prioridad || 0))
+    .find(isPrimaryPulleyDimension);
+
+  if (primaryDimension) {
+    return relaxMeasurementTolerance(primaryDimension);
+  }
+
+  const nonChannelMeasurement = measurements.find(
+    (item) => normalizeText(item.atributo_normalizado) !== "CANALES"
+  );
+
+  if (nonChannelMeasurement) {
+    return relaxMeasurementTolerance(nonChannelMeasurement);
+  }
+
+  return null;
+}
+
+function buildRelaxedMeasurementSearchVariants(intent = {}) {
+  const primaryMeasurement = getPrimaryMeasurementForRelaxedSearch(intent);
+
+  if (!primaryMeasurement) return [];
+
+  const variants = [
+    {
+      reason: "PRIMARY_MEASUREMENT_ONLY",
+      label: "medida principal",
+      relaxVehicle: false,
+      intent: {
+        ...intent,
+        medidas_detectadas: [primaryMeasurement],
+      },
+    },
+  ];
+
+  if (hasVehicleFilters(intent)) {
+    variants.push({
+      reason: "PRIMARY_MEASUREMENT_WITHOUT_VEHICLE_FILTER",
+      label: "medida principal sin filtro duro de vehículo",
+      relaxVehicle: true,
+      intent: {
+        ...intent,
+        marca_auto: null,
+        modelo_auto: null,
+        anio: null,
+        motor: null,
+        motores_posibles: [],
+        medidas_detectadas: [primaryMeasurement],
+      },
+    });
+  }
+
+  return variants;
+}
+
+function markRelaxedMeasurementSearch(intent = {}, variant = {}) {
+  intent.busqueda_medidas_relajada = {
+    activa: true,
+    motivo: variant.reason,
+    etiqueta: variant.label,
+    vehiculo_relajado: Boolean(variant.relaxVehicle),
+    medida_filtrada: variant.intent?.medidas_detectadas?.[0] || null,
+    medidas_originales: Array.isArray(intent.medidas_detectadas)
+      ? intent.medidas_detectadas
+      : [],
+  };
+}
+
+async function runCandidateQuery(intent) {
   const { whereSql, params } = buildCandidateWhere(intent);
 
   const [rows] = await pool.query(
@@ -265,6 +411,40 @@ export async function searchCandidates(intent) {
       isValidPublicCode(row.codigo_andyfers) ||
       isValidPublicCode(row.codigo_importacion)
   );
+}
+
+export async function searchCandidates(intent) {
+  const strictRows = await runCandidateQuery(intent);
+
+  if (strictRows.length > 0) {
+    return strictRows;
+  }
+
+  const hasMeasurements =
+    Array.isArray(intent.medidas_detectadas) &&
+    intent.medidas_detectadas.some(isNumericMeasurement);
+
+  if (!hasMeasurements) {
+    return [];
+  }
+
+  const variants = buildRelaxedMeasurementSearchVariants(intent);
+
+  for (const variant of variants) {
+    const relaxedRows = await runCandidateQuery(variant.intent);
+
+    if (relaxedRows.length > 0) {
+      markRelaxedMeasurementSearch(intent, variant);
+
+      return relaxedRows.map((row) => ({
+        ...row,
+        busqueda_relajada_medidas: true,
+        razon_busqueda_relajada: variant.reason,
+      }));
+    }
+  }
+
+  return [];
 }
 
 export async function getCandidateDetails(productIds) {
