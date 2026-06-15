@@ -1,5 +1,6 @@
 import { pool } from "../../config/db.js";
 import { normalizeText } from "../../utils/normalize.js";
+import { getMeasurementAttributeAliases } from "./catalogMeasurements.service.js";
 import { isValidPublicCode } from "./catalogUtils.service.js";
 
 export function buildCandidateWhere(intent) {
@@ -111,7 +112,13 @@ export function buildCandidateWhere(intent) {
     params.push(intent.anio, intent.anio, intent.anio);
   }
 
-  for (const measurement of measurementFilters) {
+  const searchableMeasurements = measurementFilters
+    .filter((measurement) => measurement.aplicar_filtro !== false)
+    .filter((measurement) => measurement.tipo === "NUMERIC_ATTRIBUTE")
+    .sort((a, b) => Number(b.prioridad || 0) - Number(a.prioridad || 0))
+    .slice(0, 3);
+
+  for (const measurement of searchableMeasurements) {
     const value = Number(measurement.valor_numero);
     const tolerance = Number.isFinite(Number(measurement.tolerancia))
       ? Number(measurement.tolerancia)
@@ -119,22 +126,26 @@ export function buildCandidateWhere(intent) {
 
     if (!Number.isFinite(value) || !measurement.atributo_normalizado) continue;
 
-    conditions.push(`
-      EXISTS (
-        SELECT 1
-        FROM producto_atributos pam
-        WHERE pam.producto_id = p.id
-          AND pam.buscable = 1
-          AND pam.atributo_normalizado = ?
-          AND pam.valor_numero BETWEEN ? AND ?
-      )
-    `);
+    const aliases = getMeasurementAttributeAliases(measurement.atributo_normalizado)
+      .map((item) => normalizeText(item))
+      .filter(Boolean);
 
-    params.push(
-      normalizeText(measurement.atributo_normalizado),
-      value - tolerance,
-      value + tolerance
-    );
+    if (!aliases.length) continue;
+
+    const aliasPlaceholders = aliases.map(() => "?").join(", ");
+
+    conditions.push(`
+    EXISTS (
+      SELECT 1
+      FROM producto_atributos pam
+      WHERE pam.producto_id = p.id
+        AND pam.buscable = 1
+        AND pam.atributo_normalizado IN (${aliasPlaceholders})
+        AND pam.valor_numero BETWEEN ? AND ?
+    )
+  `);
+
+    params.push(...aliases, value - tolerance, value + tolerance);
   }
 
   /**

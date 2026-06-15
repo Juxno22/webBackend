@@ -370,6 +370,20 @@ const SYMPTOM_RULES = [
   "JUNTA CULATA",
   "JUNTA DE CULATA",
   "WATER PUMP",
+  "POLEA TENSORA",
+  "POLEA LOCA",
+  "POLEA ARMONICA",
+  "POLEA ARMÓNICA",
+  "POLEA AMORTIGUADORA",
+  "POLEA CIGUEÑAL",
+  "POLEA CIGÜEÑAL",
+  "POLEA ALTERNADOR",
+  "POLEA DIRECCION",
+  "POLEA DIRECCIÓN",
+  "POLEA COMPRESOR",
+  "POLEA A/C",
+  "POLEA AC",
+  "PULLEY",
 ].forEach((term) => {
   if (!DIRECT_PRODUCT_TERMS.includes(term)) {
     DIRECT_PRODUCT_TERMS.push(term);
@@ -424,7 +438,13 @@ const QUERY_EXPANSION_RULES = [
       /\bPASTILLAS\b.*\bFRENOS\b/,
       /\bBALATAS\b/,
     ],
-    tokens: ["PASTILLAS", "PASTILLAS FRENO", "PASTILLAS DE FRENO", "BALATAS", "FRENOS"],
+    tokens: [
+      "PASTILLAS",
+      "PASTILLAS FRENO",
+      "PASTILLAS DE FRENO",
+      "BALATAS",
+      "FRENOS",
+    ],
   },
   {
     key: "CLIMA_CALENTAMIENTO",
@@ -455,28 +475,13 @@ const QUERY_EXPANSION_RULES = [
   },
   {
     key: "WATER_PUMP_ENGLISH",
-    patterns: [
-      /\bWATER\b.*\bPUMP\b/,
-    ],
-    tokens: [
-      "BOMBA",
-      "BOMBA AGUA",
-      "BOMBA DE AGUA",
-    ],
+    patterns: [/\bWATER\b.*\bPUMP\b/],
+    tokens: ["BOMBA", "BOMBA AGUA", "BOMBA DE AGUA"],
   },
   {
     key: "LLUVIA_POSIBLE_ELECTRICO",
-    patterns: [
-      /\bLLUEVE\b/,
-      /\bLLUVIA\b/,
-      /\bMOJA\b/,
-      /\bMOJADO\b/,
-    ],
-    tokens: [
-      "SENSOR",
-      "BULBO",
-      "SENSOR TEMPERATURA",
-    ],
+    patterns: [/\bLLUEVE\b/, /\bLLUVIA\b/, /\bMOJA\b/, /\bMOJADO\b/],
+    tokens: ["SENSOR", "BULBO", "SENSOR TEMPERATURA"],
   },
   {
     key: "RUIDO_HIRVIERA_AGUA",
@@ -610,7 +615,8 @@ function unique(values) {
 }
 
 function extractYear(question) {
-  const matches = String(question).match(/\b(19[0-9]{2}|20[0-4][0-9])\b/g) || [];
+  const matches =
+    String(question).match(/\b(19[0-9]{2}|20[0-4][0-9])\b/g) || [];
 
   if (!matches.length) return null;
 
@@ -622,7 +628,7 @@ function extractMotor(question) {
   const text = normalizeText(question);
 
   const decimalMatch = text.match(
-    /\b([0-9]{1}\.[0-9])\s*(L|LT|LTS|LITROS?)?\b/
+    /\b([0-9]{1}\.[0-9])\s*(L|LT|LTS|LITROS?)?\b/,
   );
 
   if (decimalMatch) {
@@ -631,8 +637,7 @@ function extractMotor(question) {
   }
 
   const ccMatch =
-    text.match(/\b([0-9]{3,4})\s*CC\b/) ||
-    text.match(/\b([0-9]{3,4})CC\b/);
+    text.match(/\b([0-9]{3,4})\s*CC\b/) || text.match(/\b([0-9]{3,4})CC\b/);
 
   if (ccMatch) return `${ccMatch[1]} CC`;
 
@@ -701,6 +706,36 @@ function looksLikePartNumber(rawToken) {
   return false;
 }
 
+function isLoosePartTokenBlockedByContext(question, code) {
+  const text = normalizeText(question);
+  const cleanCode = normalizePartNumber(code);
+
+  if (!cleanCode) return false;
+
+  if (
+    /^\d{3,5}[A-Z0-9]*$/.test(cleanCode) &&
+    new RegExp(`\\b(RODAMIENTO|BALERO|BEARING)\\s+(DE\\s+)?${cleanCode}\\b`).test(text)
+  ) {
+    return true;
+  }
+
+  if (
+    /^[A-Z]?\d[A-Z0-9]{1,4}$/.test(cleanCode) &&
+    new RegExp(`\\b(MOTOR|ENGINE)\\s+([A-Z0-9]+\\s+)?${cleanCode}\\b`).test(text)
+  ) {
+    return true;
+  }
+
+  if (
+    /^(6BT|N47)$/i.test(cleanCode) &&
+    new RegExp(`\\b(CUMMINS|BMW)\\s+${cleanCode}\\b`).test(text)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 function extractPartNumbers(question) {
   const contextualCodes = extractContextualPartNumbers(question);
 
@@ -709,7 +744,8 @@ function extractPartNumbers(question) {
 
   const looseCodes = rawTokens
     .filter((token) => looksLikePartNumber(token))
-    .map((token) => normalizePartNumber(token));
+    .map((token) => normalizePartNumber(token))
+    .filter((code) => !isLoosePartTokenBlockedByContext(question, code));
 
   return unique([...contextualCodes, ...looseCodes]).slice(0, 8);
 }
@@ -732,7 +768,7 @@ async function getMatchingSynonyms(normalizedQuestion, excludedTokens = []) {
     FROM sinonimos_busqueda
     WHERE activo = 1
     ORDER BY tipo, texto_usuario
-    `
+    `,
   );
 
   return rows
@@ -763,7 +799,7 @@ function levenshteinDistance(a, b) {
   if (Math.abs(left.length - right.length) > 2) return 999;
 
   const matrix = Array.from({ length: right.length + 1 }, () =>
-    Array(left.length + 1).fill(0)
+    Array(left.length + 1).fill(0),
   );
 
   for (let i = 0; i <= left.length; i++) matrix[0][i] = i;
@@ -776,7 +812,7 @@ function levenshteinDistance(a, b) {
       matrix[j][i] = Math.min(
         matrix[j][i - 1] + 1,
         matrix[j - 1][i] + 1,
-        matrix[j - 1][i - 1] + cost
+        matrix[j - 1][i - 1] + cost,
       );
     }
   }
@@ -902,7 +938,9 @@ export function asksForBranchStock(question) {
   const text = normalizeText(question);
 
   const hasBranch = STOCK_BRANCH_PATTERNS.some((pattern) => pattern.test(text));
-  const hasStockIntent = STOCK_INTENT_PATTERNS.some((pattern) => pattern.test(text));
+  const hasStockIntent = STOCK_INTENT_PATTERNS.some((pattern) =>
+    pattern.test(text),
+  );
 
   return hasBranch && hasStockIntent;
 }
@@ -918,19 +956,27 @@ function hasVehicleOnlyIntent(question, intent) {
 
   const hasCode = intent.numero_parte_tokens.length > 0;
   const hasProductTerm = intent.terminos_producto_detectados.length > 0;
-  const hasSearchableSymptom = intent.sintomas_detectados.some((item) => item.searchable);
+  const hasSearchableSymptom = intent.sintomas_detectados.some(
+    (item) => item.searchable,
+  );
 
   if (!hasVehicle || hasCode || hasProductTerm || hasSearchableSymptom) {
     return false;
   }
 
-  return VEHICLE_ONLY_PATTERNS.some((pattern) => pattern.test(text)) || hasVehicle;
+  return (
+    VEHICLE_ONLY_PATTERNS.some((pattern) => pattern.test(text)) || hasVehicle
+  );
 }
 
 function detectVehicleAlias(question) {
   const text = ` ${normalizeText(question)} `;
 
-  if (/\bGM\b/.test(text) || /\bGMC\b/.test(text) || /\bGENERAL MOTORS\b/.test(text)) {
+  if (
+    /\bGM\b/.test(text) ||
+    /\bGMC\b/.test(text) ||
+    /\bGENERAL MOTORS\b/.test(text)
+  ) {
     return {
       marca: "CHEVROLET",
       modelo: null,
@@ -964,7 +1010,7 @@ async function detectVehicleFromDb(question, excludedTokens = []) {
     WHERE marca_auto IS NOT NULL AND TRIM(marca_auto) <> ''
     ORDER BY LENGTH(marca_auto) DESC
     LIMIT 300
-    `
+    `,
   );
 
   const marcaList = marcas
@@ -997,7 +1043,7 @@ async function detectVehicleFromDb(question, excludedTokens = []) {
     WHERE modelo_auto IS NOT NULL AND TRIM(modelo_auto) <> ''
     ORDER BY LENGTH(modelo_auto) DESC
     LIMIT 800
-    `
+    `,
   );
 
   const modeloList = modelos
@@ -1081,20 +1127,20 @@ function hasGenericProductWithoutVehicle({ intent, directProductTerms }) {
   if (hasVehicle || hasCode) return false;
 
   return directProductTerms.some((term) =>
-    GENERIC_PRODUCT_TERMS_REQUIRE_VEHICLE.has(normalizeText(term))
+    GENERIC_PRODUCT_TERMS_REQUIRE_VEHICLE.has(normalizeText(term)),
   );
 }
 function hasVehicleData(intent) {
   return Boolean(
-    intent.marca_auto ||
-    intent.modelo_auto ||
-    intent.anio ||
-    intent.motor
+    intent.marca_auto || intent.modelo_auto || intent.anio || intent.motor,
   );
 }
 
 function hasCodeData(intent) {
-  return Array.isArray(intent.numero_parte_tokens) && intent.numero_parte_tokens.length > 0;
+  return (
+    Array.isArray(intent.numero_parte_tokens) &&
+    intent.numero_parte_tokens.length > 0
+  );
 }
 
 function hasSearchableSymptom(intent) {
@@ -1103,7 +1149,11 @@ function hasSearchableSymptom(intent) {
     : false;
 }
 
-function shouldAllowExploratorySearch({ intent, directProductTerms, uncertainLanguage }) {
+function shouldAllowExploratorySearch({
+  intent,
+  directProductTerms,
+  uncertainLanguage,
+}) {
   const hasVehicle = hasVehicleData(intent);
   const hasCode = hasCodeData(intent);
   const hasDirectProduct = directProductTerms.length > 0;
@@ -1159,24 +1209,25 @@ function hasVagueCoolingFluidDescription(question) {
   const text = normalizeText(question);
 
   return (
-    /\bLIQUIDO\b/.test(text) ||
-    /\bLÍQUIDO\b/.test(text) ||
-    /\bANTICONGELANTE\b/.test(text) ||
-    /\bDONDE\s+LE\s+PONGO\b/.test(text) ||
-    /\bDEPOSITO\b/.test(text) ||
-    /\bDEPÓSITO\b/.test(text)
-  ) && (
-      /\bTIRA\b/.test(text) ||
+    (/\bLIQUIDO\b/.test(text) ||
+      /\bLÍQUIDO\b/.test(text) ||
+      /\bANTICONGELANTE\b/.test(text) ||
+      /\bDONDE\s+LE\s+PONGO\b/.test(text) ||
+      /\bDEPOSITO\b/.test(text) ||
+      /\bDEPÓSITO\b/.test(text)) &&
+    (/\bTIRA\b/.test(text) ||
       /\bPIERDE\b/.test(text) ||
       /\bFUGA\b/.test(text) ||
-      /\bGOTEA\b/.test(text)
-    );
+      /\bGOTEA\b/.test(text))
+  );
 }
 
 function hasSingleLetterVehicleHint(question) {
   const text = normalizeText(question);
 
-  return /\bPARA\s+UN\s+[A-Z]\b/.test(text) || /\bPARA\s+UNA\s+[A-Z]\b/.test(text);
+  return (
+    /\bPARA\s+UN\s+[A-Z]\b/.test(text) || /\bPARA\s+UNA\s+[A-Z]\b/.test(text)
+  );
 }
 
 export function buildIntentGate({ question, intent }) {
@@ -1239,7 +1290,12 @@ export function buildIntentGate({ question, intent }) {
     };
   }
 
-  if (hasNonCatalogIntent(question) && !hasCode && !directProductTerms.length && !hasVehicle) {
+  if (
+    hasNonCatalogIntent(question) &&
+    !hasCode &&
+    !directProductTerms.length &&
+    !hasVehicle
+  ) {
     return {
       allowed: false,
       reason: "OUT_OF_CATALOG_SCOPE",
@@ -1305,7 +1361,12 @@ export function buildIntentGate({ question, intent }) {
     Array.isArray(intent.condiciones_detectadas) &&
     intent.condiciones_detectadas.length > 0;
 
-  if (!hasCode && !hasVehicle && !directProductTerms.length && hasConditionWarnings) {
+  if (
+    !hasCode &&
+    !hasVehicle &&
+    !directProductTerms.length &&
+    hasConditionWarnings
+  ) {
     return {
       allowed: false,
       reason: "DIAGNOSTIC_WITHOUT_PART_OR_VEHICLE",
@@ -1316,7 +1377,11 @@ export function buildIntentGate({ question, intent }) {
     };
   }
 
-  if (hasSingleLetterVehicleHint(question) && !intent.modelo_auto && !intent.marca_auto) {
+  if (
+    hasSingleLetterVehicleHint(question) &&
+    !intent.modelo_auto &&
+    !intent.marca_auto
+  ) {
     return {
       allowed: false,
       reason: "AMBIGUOUS_SINGLE_LETTER_VEHICLE",
@@ -1327,7 +1392,12 @@ export function buildIntentGate({ question, intent }) {
     };
   }
 
-  if (!hasCode && !hasVehicle && !directProductTerms.length && !searchableSymptoms.length) {
+  if (
+    !hasCode &&
+    !hasVehicle &&
+    !directProductTerms.length &&
+    !searchableSymptoms.length
+  ) {
     return {
       allowed: false,
       reason: "LOW_CATALOG_INTENT",
@@ -1411,10 +1481,7 @@ function detectConditionWarnings(question) {
     });
   }
 
-  if (
-    /\bNO\s+SE\s+CALIENTA\b/.test(text) ||
-    /\bNO\s+CALIENTA\b/.test(text)
-  ) {
+  if (/\bNO\s+SE\s+CALIENTA\b/.test(text) || /\bNO\s+CALIENTA\b/.test(text)) {
     warnings.push({
       key: "NEGATED_OVERHEAT",
       label:
@@ -1446,7 +1513,10 @@ function extractMotorCandidates(question) {
   const decimalMatches = text.match(/\b[0-9]{1}\.[0-9]\b/g) || [];
   const ccMatches = text.match(/\b[0-9]{3,4}\s*CC\b/g) || [];
 
-  return unique([...decimalMatches, ...ccMatches.map((item) => item.replace(/\s+/g, " "))]);
+  return unique([
+    ...decimalMatches,
+    ...ccMatches.map((item) => item.replace(/\s+/g, " ")),
+  ]);
 }
 
 function hasAmbiguousMotor(question) {
@@ -1465,10 +1535,7 @@ function hasAmbiguousMotor(question) {
 function hasNegatedOverheat(question) {
   const text = normalizeText(question);
 
-  return (
-    /\bNO\s+SE\s+CALIENTA\b/.test(text) ||
-    /\bNO\s+CALIENTA\b/.test(text)
-  );
+  return /\bNO\s+SE\s+CALIENTA\b/.test(text) || /\bNO\s+CALIENTA\b/.test(text);
 }
 
 function buildProductQueryTokens({
@@ -1478,7 +1545,11 @@ function buildProductQueryTokens({
   synonyms = [],
 }) {
   const synonymProductTokens = synonyms
-    .filter((item) => ["FAMILIA", "CATEGORIA", "CATEGORÍA", "PRODUCTO"].includes(normalizeText(item.tipo)))
+    .filter((item) =>
+      ["FAMILIA", "CATEGORIA", "CATEGORÍA", "PRODUCTO"].includes(
+        normalizeText(item.tipo),
+      ),
+    )
     .flatMap((item) => [
       ...normalizeSearchQuery(item.texto_usuario).split(" "),
       ...normalizeSearchQuery(item.texto_normalizado).split(" "),
@@ -1499,8 +1570,13 @@ function buildProductQueryTokens({
     .slice(0, 24);
 }
 
-function detectStrictProductFamilyTokens({ directProductTerms = [], expansionTokens = [] }) {
-  const text = normalizeText([...directProductTerms, ...expansionTokens].join(" "));
+function detectStrictProductFamilyTokens({
+  directProductTerms = [],
+  expansionTokens = [],
+}) {
+  const text = normalizeText(
+    [...directProductTerms, ...expansionTokens].join(" "),
+  );
 
   if (
     text.includes("WATER PUMP") ||
@@ -1534,7 +1610,13 @@ function detectStrictProductFamilyTokens({ directProductTerms = [], expansionTok
     text.includes("PASTILLAS FRENO") ||
     text.includes("BALATAS")
   ) {
-    return ["PASTILLAS", "PASTILLAS DE FRENO", "PASTILLAS FRENO", "BALATAS", "FRENOS"];
+    return [
+      "PASTILLAS",
+      "PASTILLAS DE FRENO",
+      "PASTILLAS FRENO",
+      "BALATAS",
+      "FRENOS",
+    ];
   }
 
   if (
@@ -1543,14 +1625,24 @@ function detectStrictProductFamilyTokens({ directProductTerms = [], expansionTok
     text.includes("TAPÓN RADIADOR") ||
     text.includes("TAPÓN DEPOSITO")
   ) {
-    return ["TAPON", "TAPÓN", "TAPON RADIADOR", "TAPON DEPOSITO", "TAPÓN RADIADOR"];
+    return [
+      "TAPON",
+      "TAPÓN",
+      "TAPON RADIADOR",
+      "TAPON DEPOSITO",
+      "TAPÓN RADIADOR",
+    ];
+  }
+
+  if (text.includes("POLEA") || text.includes("PULLEY")) {
+    return ["POLEA", "POLEAS"];
   }
 
   return [];
 }
 
 const SEMANTIC_PRODUCT_MAP = {
-  "BOMBA": {
+  BOMBA: {
     direct: ["BOMBA DE AGUA"],
     product: ["BOMBA", "BOMBA AGUA", "BOMBA DE AGUA", "BOMBAS DE AGUA"],
     strict: ["BOMBA", "BOMBAS", "BOMBA DE AGUA", "BOMBAS DE AGUA"],
@@ -1560,27 +1652,27 @@ const SEMANTIC_PRODUCT_MAP = {
     product: ["BOMBA", "BOMBA AGUA", "BOMBA DE AGUA", "BOMBAS DE AGUA"],
     strict: ["BOMBA", "BOMBAS", "BOMBA DE AGUA", "BOMBAS DE AGUA"],
   },
-  "TERMOSTATO": {
+  TERMOSTATO: {
     direct: ["TERMOSTATO"],
     product: ["TERMOSTATO", "TERMOSTATOS"],
     strict: ["TERMOSTATO", "TERMOSTATOS"],
   },
-  "RADIADOR": {
+  RADIADOR: {
     direct: ["RADIADOR"],
     product: ["RADIADOR", "RADIADORES"],
     strict: ["RADIADOR", "RADIADORES"],
   },
-  "MANGUERA": {
+  MANGUERA: {
     direct: ["MANGUERA"],
     product: ["MANGUERA", "MANGUERAS"],
     strict: ["MANGUERA", "MANGUERAS"],
   },
-  "TAPON": {
+  TAPON: {
     direct: ["TAPON", "TAPÓN"],
     product: ["TAPON", "TAPÓN", "TAPON RADIADOR", "TAPON DEPOSITO"],
     strict: ["TAPON", "TAPÓN"],
   },
-  "SENSOR": {
+  SENSOR: {
     direct: ["SENSOR"],
     product: ["SENSOR", "BULBO", "SENSOR TEMPERATURA"],
     strict: ["SENSOR", "BULBO"],
@@ -1634,7 +1726,7 @@ export function shouldUseSemanticIntentNormalizer(question, localIntent) {
     rawEnabled === undefined
       ? true
       : ["1", "true", "yes", "on", "si", "sí"].includes(
-        String(rawEnabled).toLowerCase()
+        String(rawEnabled).toLowerCase(),
       );
 
   if (!enabled) return false;
@@ -1675,7 +1767,7 @@ function normalizeSemanticList(values = []) {
     values
       .map((item) => normalizeText(item))
       .filter(Boolean)
-      .filter((item) => item.length >= 2)
+      .filter((item) => item.length >= 2),
   );
 }
 
@@ -1685,20 +1777,22 @@ export function applySemanticIntentToLocalIntent(localIntent, semanticIntent) {
   const pieza = normalizeText(semanticIntent.pieza_normalizada);
   const productMap = SEMANTIC_PRODUCT_MAP[pieza] || null;
 
-  const legacySemanticExclusions = normalizeSemanticList(semanticIntent.exclusiones);
+  const legacySemanticExclusions = normalizeSemanticList(
+    semanticIntent.exclusiones,
+  );
   const semanticVehicleExclusions = normalizeSemanticList(
-    semanticIntent.exclusiones_vehiculo
+    semanticIntent.exclusiones_vehiculo,
   );
   const semanticProductBrandExclusions = normalizeSemanticList(
-    semanticIntent.exclusiones_marca_producto
+    semanticIntent.exclusiones_marca_producto,
   );
 
   const currentVehicleExclusions = normalizeSemanticList(
-    localIntent.excluded_vehicle_tokens || localIntent.excluded_tokens || []
+    localIntent.excluded_vehicle_tokens || localIntent.excluded_tokens || [],
   );
 
   const currentProductBrandExclusions = normalizeSemanticList(
-    localIntent.excluded_product_brand_tokens || []
+    localIntent.excluded_product_brand_tokens || [],
   );
 
   const excludedVehicleTokens = unique([
@@ -1750,10 +1844,7 @@ export function applySemanticIntentToLocalIntent(localIntent, semanticIntent) {
       ...productMap.strict,
     ]);
 
-    next.tokens = unique([
-      ...(localIntent.tokens || []),
-      ...productMap.product,
-    ])
+    next.tokens = unique([...(localIntent.tokens || []), ...productMap.product])
       .map((token) => normalizeText(token))
       .filter((token) => !STOP_WORDS.has(token));
   }
@@ -1835,14 +1926,17 @@ export async function buildIntent(question) {
   const excludedTokens = extractExcludedTerms(question);
   const localExclusionScope = classifyLocalExclusionsByScope(
     question,
-    excludedTokens
+    excludedTokens,
   );
   const commercialPreferences = detectCommercialPreferences(question);
   const conditionWarnings = detectConditionWarnings(question);
   const measurementFilters = detectMeasurementFilters(question);
   const motorCandidates = extractMotorCandidates(question);
   const motorAmbiguo = hasAmbiguousMotor(question);
-  const synonyms = await getMatchingSynonyms(normalizedQuestion, excludedTokens);
+  const synonyms = await getMatchingSynonyms(
+    normalizedQuestion,
+    excludedTokens,
+  );
   const vehicle = await detectVehicleFromDb(question, excludedTokens);
 
   const synonymTokens = synonyms.flatMap((item) => [
@@ -1912,4 +2006,3 @@ export async function buildIntent(question) {
     strict_product_family_tokens: strictProductFamilyTokens,
   };
 }
-

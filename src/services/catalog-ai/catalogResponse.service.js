@@ -41,6 +41,11 @@ export function buildLocalAnswer({ intent, products }) {
 
   const top = products[0];
 
+  const measurementText =
+    Array.isArray(intent.medidas_detectadas) && intent.medidas_detectadas.length
+      ? describeMeasurementFilters(intent.medidas_detectadas)
+      : "";
+
   const conditionText = Array.isArray(intent.condiciones_detectadas)
     ? intent.condiciones_detectadas.map((item) => item.label).join(" ")
     : "";
@@ -105,6 +110,7 @@ export function buildLocalAnswer({ intent, products }) {
   return [
     intro,
     `La opción más fuerte es ${top.codigo_andyfers || top.codigo_importacion}: ${top.descripcion}.`,
+    measurementText ? `Tomé como referencia técnica: ${measurementText}.` : "",
     `Compatibilidad estimada: ${top.compatibilidad_estimada}%.`,
     conditionText ? `Nota: ${conditionText}` : "",
     preferenceText,
@@ -128,6 +134,7 @@ export function buildAiMessages({ question, intent, products }) {
     razones_compatibilidad: product.razones_compatibilidad,
     aplicaciones: product.aplicaciones,
     cruces: product.cruces,
+    atributos: product.atributos,
   }));
 
   return [
