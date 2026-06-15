@@ -610,6 +610,22 @@ function isValidPublicCode(value) {
   return clean !== "" && !INVALID_CODES.has(clean);
 }
 
+function normalizeVehicleLookupText(value) {
+  return ` ${normalizeSearchQuery(value)
+    .replace(/[¿?¡!.,;:()[\]{}"']/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()} `;
+}
+
+function cleanVehicleLookupToken(value) {
+  return normalizeText(
+    String(value || "")
+      .replace(/[¿?¡!.,;:()[\]{}"']/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+  );
+}
+
 function unique(values) {
   return [...new Set(values.filter(Boolean))];
 }
@@ -1004,7 +1020,7 @@ function isInvalidModelDetectedFromTechnicalMeasurement(question, modelo) {
 }
 
 async function detectVehicleFromDb(question, excludedTokens = []) {
-  const normalizedQuestion = ` ${normalizeSearchQuery(question)} `;
+  const normalizedQuestion = normalizeVehicleLookupText(question);
   const normalizedTextQuestion = ` ${normalizeText(question)} `;
   const vehicleAlias = detectVehicleAlias(question);
 
@@ -1015,7 +1031,7 @@ async function detectVehicleFromDb(question, excludedTokens = []) {
     };
   }
   const tokens = getSearchTokens(question)
-    .map((token) => normalizeText(token))
+    .map((token) => cleanVehicleLookupToken(token))
     .filter((token) => token.length >= MIN_FUZZY_TOKEN_LENGTH)
     .filter((token) => !STOP_WORDS.has(token))
     .filter((token) => !isExcludedValue(token, excludedTokens));
