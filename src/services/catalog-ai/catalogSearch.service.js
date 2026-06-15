@@ -217,7 +217,7 @@ export async function searchCandidates(intent) {
       p.descripcion_web,
       p.marca_producto,
       p.tipo_marca_producto,
-      p.marca_producto_confirmado,
+      p.marca_producto_confirmada,
       p.prioridad_ia,
       COALESCE(SUM(CASE WHEN i.disponible_web = 1 THEN i.stock ELSE 0 END), 0) AS stock_total_web,
       MIN(CASE WHEN i.disponible_web = 1 THEN i.precio ELSE NULL END) AS precio_minimo,
@@ -241,7 +241,7 @@ export async function searchCandidates(intent) {
       p.descripcion_web,
       p.marca_producto,
       p.tipo_marca_producto,
-      p.marca_producto_confirmado,
+      p.marca_producto_confirmada,
       p.prioridad_ia
     ORDER BY p.prioridad_ia DESC, p.id ASC
     LIMIT 80

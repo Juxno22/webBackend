@@ -216,7 +216,7 @@ export function formatCandidate(row, scoreData, details) {
     descripcion: row.descripcion,
     descripcion_web: row.descripcion_web,
     marca_producto: row.marca_producto,
-    tipo_marca_producto: row.tipo_marca_producto,
+    marca_producto_confirmada: row.marca_producto_confirmada,
     marca_producto_confirmada: Boolean(row.marca_producto_confirmada),
     prioridad_ia: Number(row.prioridad_ia || 0),
     stock_total_web: Number(row.stock_total_web || 0),
