@@ -20,7 +20,9 @@ export async function collectProviderStream(stream) {
   let response = "";
 
   for await (const chunk of stream) {
-    response += cleanString(chunk);
+    if (chunk === undefined || chunk === null) continue;
+
+    response += String(chunk);
   }
 
   return cleanAiText(response);
