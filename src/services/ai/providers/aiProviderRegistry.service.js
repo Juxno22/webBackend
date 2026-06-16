@@ -1,17 +1,15 @@
 import { cerebrasProvider } from "./cerebras.provider.js";
-import { geminiProvider } from "./gemini.provider.js";
+import { deepseekProvider } from "./deepseek.provider.js";
 import { groqProvider } from "./groq.provider.js";
-import { huggingFaceProvider } from "./huggingface.provider.js";
 import { mistralProvider } from "./mistral.provider.js";
 import { openRouterProvider } from "./openrouter.provider.js";
 
 const PROVIDERS = [
   groqProvider,
+  deepseekProvider,
   cerebrasProvider,
   mistralProvider,
   openRouterProvider,
-  geminiProvider,
-  huggingFaceProvider,
 ];
 
 export function getProviderById(id) {
@@ -26,7 +24,7 @@ export function getOrderedProviders(config) {
   for (const id of config.order || []) {
     const provider = getProviderById(id);
 
-    if (provider && provider.isEnabled(config)) {
+    if (provider && provider.isEnabled(config) && !ordered.includes(provider)) {
       ordered.push(provider);
     }
   }

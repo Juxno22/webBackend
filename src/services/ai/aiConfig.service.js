@@ -46,7 +46,7 @@ export function getAiAdvisorConfig() {
 export function getAiMultiProviderConfig() {
   const order = cleanString(
     process.env.AI_MULTI_PROVIDER_ORDER ||
-      "groq,cerebras,mistral,openrouter,gemini,huggingface"
+    "groq,deepseek,cerebras,mistral,openrouter"
   )
     .split(",")
     .map((item) => item.trim().toLowerCase())
@@ -72,6 +72,22 @@ export function getAiMultiProviderConfig() {
     cerebras: {
       apiKey: cleanString(process.env.CEREBRAS_API_KEY),
       model: cleanString(process.env.CEREBRAS_MODEL) || "gpt-oss-120b",
+    },
+
+    deepseek: {
+      apiKey: cleanString(process.env.DEEPSEEK_API_KEY),
+      apiUrl:
+        cleanString(process.env.DEEPSEEK_API_URL) ||
+        "https://api.deepseek.com",
+      model:
+        cleanString(process.env.DEEPSEEK_MODEL) ||
+        "deepseek-v4-pro",
+      thinkingEnabled: boolFromEnv(
+        process.env.DEEPSEEK_THINKING_ENABLED,
+        true
+      ),
+      reasoningEffort:
+        cleanString(process.env.DEEPSEEK_REASONING_EFFORT) || "high",
     },
 
     mistral: {
