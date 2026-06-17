@@ -76,7 +76,7 @@ export async function resetSearchSession(rawSessionId) {
     DELETE FROM ia_sesiones_busqueda
     WHERE session_id = ?
     `,
-        [sessionId]
+        [sessionId],
     );
 
     return sessionId;
@@ -93,7 +93,7 @@ export async function getOrCreateSearchSession(rawSessionId) {
       AND expires_at > NOW()
     LIMIT 1
     `,
-        [sessionId]
+        [sessionId],
     );
 
     if (!rows.length) {
@@ -131,14 +131,20 @@ export function extractContextFromIntent(intent = {}) {
         context.motor = cleanString(intent.motor).toUpperCase();
     }
 
-    if (Array.isArray(intent.motores_posibles) && intent.motores_posibles.length) {
+    if (
+        Array.isArray(intent.motores_posibles) &&
+        intent.motores_posibles.length
+    ) {
         context.motores_posibles = intent.motores_posibles;
     }
 
     if (intent.modo_conversacion === "DIAGNOSTIC_GUIDE") {
         context.pendiente_modo = "DIAGNOSTIC_GUIDE";
 
-        if (Array.isArray(intent.sintomas_detectados) && intent.sintomas_detectados.length) {
+        if (
+            Array.isArray(intent.sintomas_detectados) &&
+            intent.sintomas_detectados.length
+        ) {
             context.pendiente_sintomas = intent.sintomas_detectados
                 .map((item) => ({
                     key: cleanString(item.key).toUpperCase(),
@@ -149,12 +155,20 @@ export function extractContextFromIntent(intent = {}) {
                 .slice(0, 6);
         }
 
-        if (Array.isArray(intent.product_query_tokens) && intent.product_query_tokens.length) {
-            context.pendiente_product_query_tokens = intent.product_query_tokens.slice(0, 16);
+        if (
+            Array.isArray(intent.product_query_tokens) &&
+            intent.product_query_tokens.length
+        ) {
+            context.pendiente_product_query_tokens =
+                intent.product_query_tokens.slice(0, 16);
         }
 
-        if (Array.isArray(intent.terminos_producto_detectados) && intent.terminos_producto_detectados.length) {
-            context.pendiente_terminos_producto = intent.terminos_producto_detectados.slice(0, 8);
+        if (
+            Array.isArray(intent.terminos_producto_detectados) &&
+            intent.terminos_producto_detectados.length
+        ) {
+            context.pendiente_terminos_producto =
+                intent.terminos_producto_detectados.slice(0, 8);
         }
     }
 
@@ -170,32 +184,47 @@ export function extractContextFromIntent(intent = {}) {
 
 export function hasVehicleContext(context = {}) {
     return Boolean(
-        context.marca_auto ||
-        context.modelo_auto ||
-        context.anio ||
-        context.motor
+        context.marca_auto || context.modelo_auto || context.anio || context.motor,
     );
 }
 
 function hasAdvisorContext(context = {}) {
     return Boolean(
-        Array.isArray(context.pendiente_sintomas) && context.pendiente_sintomas.length ||
-        Array.isArray(context.pendiente_product_query_tokens) && context.pendiente_product_query_tokens.length ||
-        Array.isArray(context.pendiente_terminos_producto) && context.pendiente_terminos_producto.length ||
-        context.pendiente_modo
+        (Array.isArray(context.pendiente_sintomas) &&
+            context.pendiente_sintomas.length) ||
+        (Array.isArray(context.pendiente_product_query_tokens) &&
+            context.pendiente_product_query_tokens.length) ||
+        (Array.isArray(context.pendiente_terminos_producto) &&
+            context.pendiente_terminos_producto.length) ||
+        context.pendiente_modo,
     );
 }
 
-export function mergeSessionContextWithIntent(intent = {}, sessionContext = {}) {
+export function mergeSessionContextWithIntent(
+    intent = {},
+    sessionContext = {},
+) {
     const hasCurrentMarca = hasValue(intent.marca_auto);
     const hasCurrentModelo = hasValue(intent.modelo_auto);
     const hasCurrentAnio = hasValue(intent.anio);
     const hasCurrentMotor = hasValue(intent.motor);
 
+    const hasCurrentProductTokens =
+        Array.isArray(intent.product_query_tokens) &&
+        intent.product_query_tokens.length > 0;
+
+    const hasCurrentProductTerms =
+        Array.isArray(intent.terminos_producto_detectados) &&
+        intent.terminos_producto_detectados.length > 0;
+
     const merged = {
         ...intent,
-        marca_auto: hasCurrentMarca ? intent.marca_auto : sessionContext.marca_auto || null,
-        modelo_auto: hasCurrentModelo ? intent.modelo_auto : sessionContext.modelo_auto || null,
+        marca_auto: hasCurrentMarca
+            ? intent.marca_auto
+            : sessionContext.marca_auto || null,
+        modelo_auto: hasCurrentModelo
+            ? intent.modelo_auto
+            : sessionContext.modelo_auto || null,
         anio: hasCurrentAnio ? intent.anio : sessionContext.anio || null,
         motor: hasCurrentMotor ? intent.motor : sessionContext.motor || null,
     };
@@ -203,14 +232,45 @@ export function mergeSessionContextWithIntent(intent = {}, sessionContext = {}) 
     const applied = [];
 
     if (!hasCurrentMarca && sessionContext.marca_auto) applied.push("marca_auto");
-    if (!hasCurrentModelo && sessionContext.modelo_auto) applied.push("modelo_auto");
+    if (!hasCurrentModelo && sessionContext.modelo_auto)
+        applied.push("modelo_auto");
     if (!hasCurrentAnio && sessionContext.anio) applied.push("anio");
     if (!hasCurrentMotor && sessionContext.motor) applied.push("motor");
-    if (Array.isArray(sessionContext.pendiente_sintomas) && sessionContext.pendiente_sintomas.length) {
+
+    if (
+        !hasCurrentProductTokens &&
+        Array.isArray(sessionContext.pendiente_product_query_tokens) &&
+        sessionContext.pendiente_product_query_tokens.length
+    ) {
+        merged.product_query_tokens = sessionContext.pendiente_product_query_tokens;
+        merged.busqueda_por_sintoma_sesion = true;
+        applied.push("product_query_tokens");
+    }
+
+    if (
+        !hasCurrentProductTerms &&
+        Array.isArray(sessionContext.pendiente_terminos_producto) &&
+        sessionContext.pendiente_terminos_producto.length
+    ) {
+        merged.terminos_producto_detectados =
+            sessionContext.pendiente_terminos_producto;
+        merged.busqueda_por_sintoma_sesion = true;
+        applied.push("terminos_producto_detectados");
+    }
+
+    if (
+        Array.isArray(sessionContext.pendiente_sintomas) &&
+        sessionContext.pendiente_sintomas.length
+    ) {
         merged.pendiente_sintomas_sesion = sessionContext.pendiente_sintomas;
     }
+
     if (sessionContext.pendiente_modo) {
         merged.pendiente_modo_sesion = sessionContext.pendiente_modo;
+    }
+
+    if (sessionContext.asesor_turnos) {
+        merged.asesor_turnos = Number(sessionContext.asesor_turnos || 0);
     }
 
     return {
@@ -235,7 +295,32 @@ export async function updateSearchSessionContext({
         ...extracted,
     };
 
-        const hasContext = hasVehicleContext(nextContext) || hasAdvisorContext(nextContext);
+    const advisorModes = new Set([
+        "DIAGNOSTIC_GUIDE",
+        "COMPARISON_GUIDE",
+        "COMPATIBILITY_EXPLANATION",
+    ]);
+
+    if (advisorModes.has(intent.modo_conversacion)) {
+        nextContext.asesor_turnos = Math.min(
+            Number(previousContext.asesor_turnos || 0) + 1,
+            4
+        );
+    }
+
+    if (
+        intent.limpiar_pendiente_asesoria ||
+        intent.modo_conversacion === "PRODUCT_SEARCH"
+    ) {
+        delete nextContext.pendiente_modo;
+        delete nextContext.pendiente_sintomas;
+        delete nextContext.pendiente_product_query_tokens;
+        delete nextContext.pendiente_terminos_producto;
+        delete nextContext.asesor_turnos;
+    }
+
+    const hasContext =
+        hasVehicleContext(nextContext) || hasAdvisorContext(nextContext);
 
     if (!hasContext) {
         return nextContext;
@@ -259,7 +344,7 @@ export async function updateSearchSessionContext({
             cleanString(question).slice(0, 1000),
             cleanString(origen) || "CHAT_PUBLICO",
             buildExpiresAt(),
-        ]
+        ],
     );
 
     return nextContext;

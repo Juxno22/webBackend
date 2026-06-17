@@ -51,7 +51,13 @@ function asksCompatibilityExplanation(question) {
   return (
     /\bPOR\s+QUE\b.*\b(LE\s+QUEDA|APLICA|COMPATIBLE|SIRVE)\b/.test(text) ||
     /\bPOR\s+QUÉ\b.*\b(LE\s+QUEDA|APLICA|COMPATIBLE|SIRVE)\b/.test(text) ||
-    /\b(LE\s+QUEDA|LE\s+SIRVE|APLICA|COMPATIBLE)\b.*\b(POR\s+QUE|POR\s+QUÉ)\b/.test(text)
+    /\b(LE\s+QUEDA|LE\s+SIRVE|APLICA|COMPATIBLE)\b.*\b(POR\s+QUE|POR\s+QUÉ)\b/.test(text) ||
+    /\bLE\s+PUEDO\s+PONER\b/.test(text) ||
+    /\bPUEDO\s+PONER\b/.test(text) ||
+    /\bSE\s+LE\s+PUEDE\s+PONER\b/.test(text) ||
+    /\bLE\s+QUEDA\b/.test(text) ||
+    /\bLE\s+SIRVE\b/.test(text) ||
+    /\bSIRVE\s+PARA\b/.test(text)
   );
 }
 
@@ -67,6 +73,21 @@ function isConceptComparison(question) {
     /\bVS\b/.test(text) ||
     /\bMEJOR\b/.test(text) ||
     /\bCONVIENE\b/.test(text)
+  );
+}
+
+function isConceptExplanationQuestion(question) {
+  const text = normalizeText(question);
+
+  return (
+    /\bQUE\s+ES\b/.test(text) ||
+    /\bQUÉ\s+ES\b/.test(text) ||
+    /\bPARA\s+QUE\s+SIRVE\b/.test(text) ||
+    /\bPARA\s+QUÉ\s+SIRVE\b/.test(text) ||
+    /\bCOMO\s+FUNCIONA\b/.test(text) ||
+    /\bCÓMO\s+FUNCIONA\b/.test(text) ||
+    /\bQUE\s+HACE\b/.test(text) ||
+    /\bQUÉ\s+HACE\b/.test(text)
   );
 }
 
@@ -201,6 +222,15 @@ export function routeCatalogConversation({ question, intent = {}, sessionContext
       mode: CATALOG_CONVERSATION_MODES.PRODUCT_COMPARISON,
       reason: "PRODUCT_COMPARISON_WITH_CATALOG_CONTEXT",
       shouldSearchCatalog: true,
+      requiresMoreData: false,
+    };
+  }
+
+  if (isConceptExplanationQuestion(question)) {
+    return {
+      mode: CATALOG_CONVERSATION_MODES.COMPARISON_GUIDE,
+      reason: "PRODUCT_CONCEPT_EXPLANATION",
+      shouldSearchCatalog: false,
       requiresMoreData: false,
     };
   }

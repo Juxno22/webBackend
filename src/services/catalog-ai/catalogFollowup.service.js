@@ -158,6 +158,18 @@ function normalizeReplies(values = []) {
         .slice(0, 6);
 }
 
+function isBeginner(intent = {}) {
+    return intent.nivel_usuario === "PRINCIPIANTE";
+}
+
+function getAdvisorTurns(intent = {}) {
+    return Number(
+        intent.asesor_turnos ||
+        intent.contexto_corto?.asesor_turnos ||
+        0
+    );
+}
+
 function makeFollowup({
     requiereSeguimiento = false,
     bloqueante = false,
@@ -165,13 +177,14 @@ function makeFollowup({
     datosFaltantes = [],
     preguntas = [],
     respuestasRapidas = [],
+    maxPreguntas = 2,
 } = {}) {
     return {
         requiere_seguimiento: Boolean(requiereSeguimiento),
         bloqueante: Boolean(bloqueante),
         siguiente_accion: siguienteAccion,
         datos_faltantes: [...new Set(datosFaltantes)].filter(Boolean),
-        preguntas_seguimiento: normalizeReplies(preguntas).slice(0, 3),
+        preguntas_seguimiento: normalizeReplies(preguntas).slice(0, maxPreguntas),
         respuestas_rapidas: normalizeReplies(respuestasRapidas),
     };
 }
@@ -179,18 +192,81 @@ function makeFollowup({
 function buildDiagnosticFollowup({ intent = {} } = {}) {
     const symptomKeys = getSymptomKeys(intent);
     const level = intent.nivel_usuario || "INTERMEDIO";
-    const hasFanNotWorking = symptomKeys.includes("FAN_NOT_WORKING");
-    const missingVehicleFields = buildMissingVehicleFields(intent, {
-        includeMotor: level === "MECANICO",
-    });
-    const missingVehicle = compactMissingVehicle(missingVehicleFields);
+    const beginner = isBeginner(intent);
+    const advisorTurns = getAdvisorTurns(intent);
 
+    const hasFanNotWorking = symptomKeys.includes("FAN_NOT_WORKING");
     const hasOverheat = symptomKeys.includes("COOLING_OVERHEAT");
     const hasLeak = symptomKeys.includes("COOLING_LEAK");
     const hasNoStart = symptomKeys.includes("NO_START");
 
+    const missingVehicleFields = buildMissingVehicleFields(intent, {
+        includeMotor: level === "MECANICO",
+    });
+
+    const missingVehicle = compactMissingVehicle(missingVehicleFields);
+    const vehicleQuestions = buildVehicleMissingQuestions(intent, missingVehicleFields);
+
+    if (beginner && advisorTurns >= 2) {
+        return makeFollowup({
+            requiereSeguimiento: true,
+            bloqueante: false,
+            siguienteAccion: "SHOW_GUIDED_PART_OPTIONS",
+            datosFaltantes: missingVehicle.length ? missingVehicle : [],
+            preguntas: missingVehicle.length
+                ? [
+                    vehicleQuestions[0],
+                    "Si no tienes ese dato, podemos validar con ventas usando foto o muestra física.",
+                ]
+                : [
+                    "Puedo mostrar opciones comunes para validar con ventas.",
+                ],
+            respuestasRapidas: [
+                "Buscar termostato",
+                "Buscar bomba de agua",
+                "Buscar tapón",
+                "Buscar radiador",
+                "Buscar manguera",
+                "Buscar ventilador",
+            ],
+            maxPreguntas: 2,
+        });
+    }
+
+    if (beginner) {
+        return makeFollowup({
+            requiereSeguimiento: true,
+            bloqueante: missingVehicle.length > 0,
+            siguienteAccion: "ASK_BASIC_VEHICLE",
+            datosFaltantes: missingVehicle.length ? missingVehicle : ["detalle_sintoma"],
+            preguntas: missingVehicle.length
+                ? [
+                    vehicleQuestions[0] || "¿Qué marca, modelo y año es tu vehículo?",
+                ]
+                : [
+                    hasFanNotWorking
+                        ? "¿El ventilador no prende nunca o prende muy tarde?"
+                        : hasLeak
+                            ? "¿Tira líquido por manguera, radiador, depósito o debajo del motor?"
+                            : hasOverheat
+                                ? "¿Se calienta en tráfico, carretera, subida o después de manejar?"
+                                : hasNoStart
+                                    ? "¿Da marcha o no hace nada?"
+                                    : "¿Qué síntoma principal presenta?",
+                ],
+            respuestasRapidas: missingVehicle.length
+                ? []
+                : hasFanNotWorking
+                    ? ["No prende nunca", "Prende muy tarde", "Se calienta en tráfico"]
+                    : hasOverheat || hasLeak
+                        ? COOLING_SYMPTOM_QUICK_REPLIES
+                        : [],
+            maxPreguntas: 1,
+        });
+    }
+
     const preguntas = [
-        ...buildVehicleMissingQuestions(intent, missingVehicleFields),
+        ...vehicleQuestions,
     ];
 
     if (hasFanNotWorking) {
@@ -232,6 +308,7 @@ function buildDiagnosticFollowup({ intent = {} } = {}) {
                         "Tira anticongelante",
                         "Hace ruido",
                     ],
+        maxPreguntas: 2,
     });
 }
 
@@ -262,8 +339,9 @@ function buildProductSearchFollowup({ intent = {}, products = [] } = {}) {
     }
 
     const missingVehicleFields = buildMissingVehicleFields(intent, {
-        includeMotor: true,
+        includeMotor: intent.nivel_usuario === "MECANICO" || "INTERMEDIO",
     });
+
     const missingVehicle = compactMissingVehicle(missingVehicleFields);
 
     const missing = [];
@@ -297,7 +375,7 @@ function buildProductSearchFollowup({ intent = {}, products = [] } = {}) {
 
 function buildCompatibilityFollowup({ intent = {}, products = [] } = {}) {
     const missingVehicleFields = buildMissingVehicleFields(intent, {
-        includeMotor: true,
+        includeMotor: intent.nivel_usuario === "MECANICO" || "INTERMEDIO",
     });
     const missingVehicle = compactMissingVehicle(missingVehicleFields);
     const missing = [...missingVehicle];

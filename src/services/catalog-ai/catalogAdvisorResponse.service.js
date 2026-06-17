@@ -33,6 +33,32 @@ function hasTerm(intent = {}, pattern) {
   return pattern.test(text);
 }
 
+function getAdvisorTurns(intent = {}, sessionContext = {}) {
+  return Number(
+    intent.asesor_turnos ||
+    sessionContext.asesor_turnos ||
+    intent.contexto_corto?.asesor_turnos ||
+    0
+  );
+}
+
+function asksDefinition(intent = {}) {
+  const text = String(intent.pregunta_normalizada || "").toUpperCase();
+
+  return (
+    /\bQUE\s+ES\b/.test(text) ||
+    /\bQUÉ\s+ES\b/.test(text) ||
+    /\bPARA\s+QUE\s+SIRVE\b/.test(text) ||
+    /\bPARA\s+QUÉ\s+SIRVE\b/.test(text) ||
+    /\bCOMO\s+FUNCIONA\b/.test(text) ||
+    /\bCÓMO\s+FUNCIONA\b/.test(text)
+  );
+}
+
+function buildCoolingProposalText() {
+  return "Propuesta inicial a revisar: termostato, bomba de agua, tapón, radiador, mangueras, ventilador o sensor de temperatura.";
+}
+
 function buildDiagnosticGuideAnswer({ intent = {}, sessionContext = {} }) {
   const vehicleText = buildVehicleText(intent, sessionContext);
   const symptomKeys = getSymptomKeys(intent, sessionContext);
@@ -71,12 +97,22 @@ function buildDiagnosticGuideAnswer({ intent = {}, sessionContext = {} }) {
     }
 
     if (level === "PRINCIPIANTE") {
+      const advisorTurns = getAdvisorTurns(intent, sessionContext);
+
+      if (vehicleText || advisorTurns >= 2) {
+        return [
+          "Con ese síntoma ya puedo darte una ruta inicial sin alargar más la conversación.",
+          buildCoolingProposalText(),
+          vehicleText
+            ? `Con ${vehicleText}, puedo mostrar opciones orientativas del catálogo para que ventas valide compatibilidad.`
+            : "Si no sabes más datos, ventas puede validar con foto, muestra física o código de la pieza.",
+        ].join(" ");
+      }
+
       return [
-        "Cuando un carro se calienta, no siempre es una sola pieza; puede ser algo del sistema de enfriamiento.",
-        "Las piezas más comunes a revisar son termostato, bomba de agua, radiador, tapón, mangueras, ventilador o sensor de temperatura.",
-        vehicleText
-          ? `Como veníamos con ${vehicleText}, dime si se calienta en tráfico, en subida, con clima o después de manejar un rato.`
-          : "Dime marca, modelo, año y motor para ayudarte a buscar la pieza correcta.",
+        "Cuando un carro se calienta, no siempre es una sola pieza; normalmente es del sistema de enfriamiento.",
+        buildCoolingProposalText(),
+        "Dime solo marca, modelo y año para mostrarte opciones orientativas.",
       ].join(" ");
     }
     return [
@@ -100,8 +136,13 @@ function buildDiagnosticGuideAnswer({ intent = {}, sessionContext = {} }) {
 function buildComparisonGuideAnswer({ intent = {} }) {
   const mentionsPump = hasTerm(intent, /BOMBA/);
   const mentionsThermostat = hasTerm(intent, /TERMOSTATO/);
+  const definitionQuestion = asksDefinition(intent);
   const mentionsRadiatorCap = hasTerm(intent, /TAPON.*RADIADOR|TAPÓN.*RADIADOR/);
   const mentionsDepositCap = hasTerm(intent, /TAPON.*DEPOSITO|TAPÓN.*DEPÓSITO|TAPON.*DEPÓSITO|TAPÓN.*DEPOSITO/);
+
+  if (definitionQuestion && mentionsThermostat) {
+    return "El termostato es una válvula que regula el paso del anticongelante según la temperatura del motor. Cuando está cerrado ayuda a que el motor alcance temperatura; cuando abre, permite circular el anticongelante hacia el radiador. Si falla, puede causar calentamiento o que el motor tarde en llegar a temperatura. Para cotizar uno necesito marca, modelo y año del vehículo.";
+  }
 
   if (mentionsPump && mentionsThermostat) {
     return "La bomba de agua mueve el anticongelante por el motor y radiador; el termostato regula cuándo se abre el paso del anticongelante según temperatura. Si el auto se calienta, cualquiera de los dos puede estar involucrado, pero también influyen radiador, tapón, mangueras, ventilador y sensor. Para buscar la pieza correcta dime marca, modelo, año y motor.";
