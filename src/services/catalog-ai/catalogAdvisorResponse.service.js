@@ -198,6 +198,17 @@ function buildCompatibilityGuideAnswer({ intent = {}, sessionContext = {} }) {
     ].join(" ");
   }
   const vehicleText = buildVehicleText(intent, sessionContext);
+  const productText = Array.isArray(intent.terminos_producto_detectados) && intent.terminos_producto_detectados.length
+    ? intent.terminos_producto_detectados[0]
+    : "la pieza";
+
+  if (vehicleText && Array.isArray(intent.terminos_producto_detectados) && intent.terminos_producto_detectados.length) {
+    return [
+      `Para explicar por qué ${productText.toLowerCase()} podría aplicar en ${vehicleText}, se revisa la aplicación registrada en catálogo: marca, modelo, año, motor y rango de años.`,
+      "También se valida diseño físico, temperatura o especificación técnica, cruces de fabricante y código de la pieza.",
+      "No lo confirmaría solo por nombre comercial; ventas debe validar compatibilidad final antes de cotizar.",
+    ].join(" ");
+  }
 
   return [
     "Para explicar compatibilidad necesito cruzar la pieza contra aplicaciones, motor, años y posibles cruces registrados en el catálogo.",

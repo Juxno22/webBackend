@@ -129,12 +129,16 @@ export function buildCompatibilityExplanationLocalAnswer({ products = [], intent
   const vehicleText = buildVehicleText(intent);
 
   if (!products.length) {
+    const productText = Array.isArray(intent.terminos_producto_detectados) && intent.terminos_producto_detectados.length
+      ? intent.terminos_producto_detectados.join(", ")
+      : "la pieza";
+
     return [
-      "No encontré un producto real del catálogo para explicar compatibilidad.",
       vehicleText
-        ? `Tengo como vehículo ${vehicleText}, pero falta una pieza o código concreto para validar.`
-        : "Dime marca, modelo, año, motor y el código o pieza que quieres validar.",
-      "Ventas debe confirmar compatibilidad y disponibilidad final.",
+        ? `No encontré un producto real del catálogo para confirmar ${productText.toLowerCase()} en ${vehicleText}.`
+        : "No encontré un producto real del catálogo para explicar compatibilidad.",
+      "Aun así, la compatibilidad se valida por aplicación registrada, rango de años, motor, diseño físico, especificación técnica y cruces de fabricante.",
+      "No lo confirmaría solo por nombre comercial; ventas debe validar compatibilidad y disponibilidad final.",
     ].join(" ");
   }
 
