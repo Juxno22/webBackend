@@ -195,11 +195,19 @@ export function buildCrossApplicationComparisonEvidence({
 
   return {
     tipo: "CROSS_APPLICATION_COMPARISON",
+    nivel_confianza: crossData.nivel_confianza || "VALIDAR",
+    misma_familia_motor: Boolean(crossData.misma_familia_motor),
+    familia_motor_objetivo: crossData.familia_motor_objetivo || null,
+    familia_motor_donante: crossData.familia_motor_donante || null,
+    mensaje_base:
+      crossData.mensaje_base || "Se debe validar aplicación exacta antes de confirmar.",
     regla_seguridad:
-      "No confirmar compatibilidad final si no hay coincidencia de aplicación, código, motor, años o cruce registrado.",
+      crossData.regla_seguridad ||
+      "No confirmar compatibilidad final sin validar año, motor, código, aplicación registrada o muestra física.",
     pregunta:
       "El cliente pregunta si puede usar una pieza de un vehículo donante en su vehículo.",
-    pieza_detectada: crossData.pieza || intent.terminos_producto_detectados || [],
+    pieza_detectada:
+      crossData.pieza || intent.terminos_producto_detectados || [],
     vehiculo_objetivo: crossData.vehiculo_objetivo || {
       marca: intent.marca_auto,
       modelo: intent.modelo_auto,
@@ -220,7 +228,7 @@ export function buildCrossApplicationComparisonEvidence({
         : [],
     })),
     instruccion_respuesta:
-      "Responder como asesor: explicar que puede haber cruces, pero no confirmar que sí queda. Pedir año/motor/código o muestra física. Máximo 4 oraciones.",
+      "Responder como asesor. Puede decir alta probabilidad, puede existir cruce o se ve viable si la evidencia lo permite. No debe decir que sí queda, que es compatible al 100%, ni que debería quedar. Máximo 4 oraciones.",
   };
 }
 
@@ -229,27 +237,46 @@ export function buildCrossApplicationComparisonLocalAnswer({
   intent = {},
 } = {}) {
   const crossData = getCrossApplicationData(intent);
-  const targetText = buildCrossVehicleText(crossData.vehiculo_objetivo || {
-    marca: intent.marca_auto,
-    modelo: intent.modelo_auto,
-    anio: intent.anio,
-    motor: intent.motor,
-  });
 
-  const donorText = buildCrossVehicleText(crossData.vehiculo_donante || {});
-  const partText =
-    Array.isArray(crossData.pieza) && crossData.pieza.length
-      ? crossData.pieza.join(", ")
-      : "la pieza";
+  const targetText = [
+    crossData.vehiculo_objetivo?.marca,
+    crossData.vehiculo_objetivo?.modelo,
+    intent.anio,
+    intent.motor,
+  ]
+    .filter(Boolean)
+    .join(" ");
 
-  const foundText = products.length
-    ? "Voy a comparar contra las opciones encontradas en catálogo, pero la validación final depende de aplicación, años, motor y cruces."
-    : "No encontré una coincidencia suficiente en catálogo para confirmarlo automáticamente.";
+  const donorText = [
+    crossData.vehiculo_donante?.marca,
+    crossData.vehiculo_donante?.modelo,
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  const pieza = Array.isArray(crossData.pieza)
+    ? crossData.pieza.join(", ")
+    : crossData.pieza || "la pieza";
+
+  const confidence = crossData.nivel_confianza || "VALIDAR";
+  const base =
+    crossData.mensaje_base || "Se debe validar aplicación exacta antes de confirmar.";
+
+  const validationText =
+    confidence === "ALTA_PROBABILIDAD"
+      ? "Se ve viable como cruce, pero no lo confirmaría sin revisar año, motor, código o aplicación registrada."
+      : confidence === "POSIBLE_PERO_VALIDAR_MEDIDAS"
+        ? "Puede existir cruce, pero habría que revisar medidas físicas, año, motor y aplicación registrada."
+        : "No conviene asumir que queda sin validar año, motor, código o aplicación registrada.";
+
+  const catalogText = products.length
+    ? "También revisé opciones del catálogo para apoyar la validación."
+    : "No encontré una coincidencia exacta de catálogo para confirmarlo automáticamente.";
 
   return [
-    `Lo tomaría como comparación de aplicación: ${partText} de ${donorText || "otro vehículo"} contra ${targetText || "tu vehículo"}.`,
-    "No conviene confirmar que sí queda solo por nombre comercial; Chevy y Corsa pueden compartir algunas referencias, pero depende de año, motor, código y aplicación registrada.",
-    foundText,
-    "Pásame año/motor del Chevy o el código de la bomba del Corsa para validarlo mejor; ventas confirma compatibilidad final.",
+    `Lo tomaría como comparación de aplicación: ${pieza} de ${donorText || "otro vehículo"} contra ${targetText || "tu vehículo"}.`,
+    base,
+    validationText,
+    `${catalogText} Ventas confirma compatibilidad final.`,
   ].join(" ");
 }
