@@ -55,16 +55,49 @@ function normalizeYear(value) {
 
 export function shouldResetSearchSession(question) {
     const text = normalizeText(question);
-
     return (
         /\bOLVIDA\b.*\bAUTO\b/.test(text) ||
         /\bOLVIDA\b.*\bCARRO\b/.test(text) ||
+        /\bOLVIDA\b.*\bVEHICULO\b/.test(text) ||
+        /\bOLVIDA\b.*\bVEHÍCULO\b/.test(text) ||
+        /\bOLVIDA\b.*\bMOTO\b/.test(text) ||
         /\bBORRA\b.*\bAUTO\b/.test(text) ||
         /\bBORRA\b.*\bCARRO\b/.test(text) ||
+        /\bBORRA\b.*\bVEHICULO\b/.test(text) ||
+        /\bBORRA\b.*\bVEHÍCULO\b/.test(text) ||
+        /\bBORRA\b.*\bMOTO\b/.test(text) ||
         /\bCAMBIAR\b.*\bVEHICULO\b/.test(text) ||
         /\bCAMBIAR\b.*\bVEHÍCULO\b/.test(text) ||
+        /\bCAMBIAR\b.*\bAUTO\b/.test(text) ||
+        /\bCAMBIAR\b.*\bCARRO\b/.test(text) ||
         /\bNUEVO\b.*\bAUTO\b/.test(text) ||
-        /\bNUEVO\b.*\bCARRO\b/.test(text)
+        /\bNUEVO\b.*\bCARRO\b/.test(text) ||
+        /\bNUEVO\b.*\bVEHICULO\b/.test(text) ||
+        /\bNUEVO\b.*\bVEHÍCULO\b/.test(text) ||
+        /\bNUEVO\b.*\bMOTO\b/.test(text) ||
+        /\bREINICIAR\b/.test(text) ||
+        /\bRESETEAR\b/.test(text) ||
+        /\bRESET\b/.test(text) ||
+        /\bINICIAR\s+DE\s+NUEVO\b/.test(text) ||
+        /\bEMPEZAR\s+DE\s+NUEVO\b/.test(text) ||
+        /\bCOMENZAR\s+DE\s+NUEVO\b/.test(text) ||
+        /\bLIMPIAR\b.*\bSESION\b/.test(text) ||
+        /\bVACIAR\b.*\bSESION\b/.test(text) ||
+        /\bSELECCIONAR\s+OTRO\b/.test(text) ||
+        /\bESCOGER\s+OTRO\b/.test(text) ||
+        /\bELEGIR\s+OTRO\b/.test(text) ||
+        /\bCAMBIAR\s+DE\s+AUTO\b/.test(text) ||
+        /\bCAMBIAR\s+DE\s+CARRO\b/.test(text) ||
+        /\bCAMBIAR\s+DE\s+VEHICULO\b/.test(text) ||
+        /\bCAMBIAR\s+DE\s+VEHÍCULO\b/.test(text) ||
+        /\bNUEVA\s+BUSQUEDA\b/.test(text) ||
+        /\bNUEVA\s+BÚSQUEDA\b/.test(text) ||
+        /\bNUEVA\s+CONSULTA\b/.test(text) ||
+        /\bOTRA\s+CONSULTA\b/.test(text) ||
+        /\bOTRO\s+AUTO\b/.test(text) ||
+        /\bOTRO\s+CARRO\b/.test(text) ||
+        /\bOTRO\s+VEHICULO\b/.test(text) ||
+        /\bOTRO\s+VEHÍCULO\b/.test(text)
     );
 }
 
