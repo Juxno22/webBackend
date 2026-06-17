@@ -407,6 +407,35 @@ function buildCompatibilityFollowup({ intent = {}, products = [] } = {}) {
     });
 }
 
+function buildCrossApplicationFollowup({ intent = {} } = {}) {
+    const crossData = intent.comparacion_aplicacion || {};
+    const target = crossData.vehiculo_objetivo || {};
+    const donor = crossData.vehiculo_donante || {};
+
+    const targetText = [target.marca, target.modelo].filter(Boolean).join(" ");
+    const donorText = [donor.marca, donor.modelo].filter(Boolean).join(" ");
+
+    return makeFollowup({
+        requiereSeguimiento: true,
+        bloqueante: false,
+        siguienteAccion: "ASK_CROSS_APPLICATION_DATA",
+        datosFaltantes: ["anio_motor_codigo"],
+        preguntas: [
+            targetText
+                ? `¿Qué año y motor es tu ${targetText}?`
+                : "¿Qué año y motor es tu vehículo?",
+            donorText
+                ? `¿Tienes el código o foto de la pieza del ${donorText}?`
+                : "¿Tienes el código o foto de la pieza que quieres comparar?",
+        ],
+        respuestasRapidas: [
+            "Validar por código",
+            "Validar por aplicación",
+            "Validar por muestra física",
+        ],
+    });
+}
+
 function buildComparisonFollowup({ intent = {}, products = [] } = {}) {
     if (products.length >= 2) {
         return makeFollowup({
@@ -548,6 +577,13 @@ export function buildCatalogFollowup({
         normalizedQuestion.includes("LE QUEDA")
     ) {
         return buildCompatibilityFollowup({ intent, products });
+    }
+
+    if (
+        intent.comparacion_aplicacion?.activa ||
+        intent.conversation_route?.reason === "CROSS_APPLICATION_COMPARISON"
+    ) {
+        return buildCrossApplicationFollowup({ intent });
     }
 
     if (

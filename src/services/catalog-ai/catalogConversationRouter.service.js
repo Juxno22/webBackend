@@ -61,6 +61,22 @@ function asksCompatibilityExplanation(question) {
   );
 }
 
+function hasCrossApplicationComparison(question, intent = {}) {
+  const text = normalizeText(question);
+
+  return Boolean(
+    intent.comparacion_aplicacion?.activa ||
+    (
+      (
+        /\bLE\s+PUEDO\s+PONER\b/.test(text) ||
+        /\bPUEDO\s+PONER\b/.test(text) ||
+        /\bSE\s+LE\s+PUEDE\s+PONER\b/.test(text)
+      ) &&
+      hasProductData(intent)
+    )
+  );
+}
+
 function isConceptComparison(question) {
   const text = normalizeText(question);
 
@@ -207,6 +223,15 @@ export function routeCatalogConversation({ question, intent = {}, sessionContext
   const hasProduct = hasProductData(intent);
   const hasSymptoms = hasAny(intent.sintomas_detectados);
   const hasCodes = hasAny(intent.numero_parte_tokens);
+
+  if (hasCrossApplicationComparison(question, intent)) {
+    return {
+      mode: CATALOG_CONVERSATION_MODES.PRODUCT_COMPARISON,
+      reason: "CROSS_APPLICATION_COMPARISON",
+      shouldSearchCatalog: true,
+      requiresMoreData: false,
+    };
+  }
 
   if (asksCompatibilityExplanation(question)) {
     return {

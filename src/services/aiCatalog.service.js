@@ -47,6 +47,8 @@ import { shouldIgnoreSessionContextForQuestion } from "./catalog-ai/catalogSessi
 import {
   buildProductComparisonEvidence,
   buildProductComparisonLocalAnswer,
+  buildCrossApplicationComparisonEvidence,
+  buildCrossApplicationComparisonLocalAnswer,
 } from "./catalog-ai/catalogProductComparison.service.js";
 import {
   buildCompatibilityEvidence,
@@ -244,18 +246,35 @@ async function runProductSearch({ cleanQuestion, effectiveIntent, origen }) {
   let advisorEvidence = null;
 
   if (conversationMode === CATALOG_CONVERSATION_MODES.PRODUCT_COMPARISON) {
-    service = "LOCAL_COMPARADOR_CONTROLADO";
-    advisorEvidence = buildProductComparisonEvidence({
-      products: recommended,
-      intent: effectiveIntent,
-    });
+    const isCrossApplicationComparison =
+      effectiveIntent.conversation_route?.reason === "CROSS_APPLICATION_COMPARISON" ||
+      effectiveIntent.comparacion_aplicacion?.activa;
 
-    answer = buildProductComparisonLocalAnswer({
-      products: recommended,
-      intent: effectiveIntent,
-    });
+    service = isCrossApplicationComparison
+      ? "LOCAL_COMPARADOR_APLICACIONES_CONTROLADO"
+      : "LOCAL_COMPARADOR_CONTROLADO";
 
-    useAdvisorWriter = recommended.length > 0;
+    advisorEvidence = isCrossApplicationComparison
+      ? buildCrossApplicationComparisonEvidence({
+        products: recommended,
+        intent: effectiveIntent,
+      })
+      : buildProductComparisonEvidence({
+        products: recommended,
+        intent: effectiveIntent,
+      });
+
+    answer = isCrossApplicationComparison
+      ? buildCrossApplicationComparisonLocalAnswer({
+        products: recommended,
+        intent: effectiveIntent,
+      })
+      : buildProductComparisonLocalAnswer({
+        products: recommended,
+        intent: effectiveIntent,
+      });
+
+    useAdvisorWriter = recommended.length > 0 || isCrossApplicationComparison;
   }
 
   if (conversationMode === CATALOG_CONVERSATION_MODES.COMPATIBILITY_EXPLANATION) {
@@ -273,7 +292,7 @@ async function runProductSearch({ cleanQuestion, effectiveIntent, origen }) {
     useAdvisorWriter = recommended.length > 0;
   }
 
-  if (recommended.length > 0) {
+  if (recommended.length > 0 || useAdvisorWriter) {
     try {
       const aiResult = useAdvisorWriter
         ? await generateAiAdvisorAnswer({

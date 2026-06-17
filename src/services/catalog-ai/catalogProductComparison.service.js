@@ -171,3 +171,85 @@ export function buildProductComparisonLocalAnswer({ products = [], intent = {} }
     "La diferencia real debe validarse con aplicación, motor, medida y cruces antes de cotizar; ventas confirma compatibilidad y disponibilidad final.",
   ].join(" ");
 }
+
+function buildCrossVehicleText(vehicle = {}) {
+  return [
+    vehicle.marca,
+    vehicle.modelo,
+    vehicle.anio,
+    vehicle.motor,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function getCrossApplicationData(intent = {}) {
+  return intent.comparacion_aplicacion || {};
+}
+
+export function buildCrossApplicationComparisonEvidence({
+  products = [],
+  intent = {},
+} = {}) {
+  const crossData = getCrossApplicationData(intent);
+
+  return {
+    tipo: "CROSS_APPLICATION_COMPARISON",
+    regla_seguridad:
+      "No confirmar compatibilidad final si no hay coincidencia de aplicación, código, motor, años o cruce registrado.",
+    pregunta:
+      "El cliente pregunta si puede usar una pieza de un vehículo donante en su vehículo.",
+    pieza_detectada: crossData.pieza || intent.terminos_producto_detectados || [],
+    vehiculo_objetivo: crossData.vehiculo_objetivo || {
+      marca: intent.marca_auto,
+      modelo: intent.modelo_auto,
+      anio: intent.anio,
+      motor: intent.motor,
+    },
+    vehiculo_donante: crossData.vehiculo_donante || null,
+    productos_encontrados: products.slice(0, 4).map((product) => ({
+      codigo: product.codigo_andyfers || product.codigo_importacion,
+      descripcion: product.descripcion_web || product.descripcion,
+      familia: product.familia || product.categoria,
+      compatibilidad_estimada: product.compatibilidad_estimada,
+      aplicaciones: Array.isArray(product.aplicaciones)
+        ? product.aplicaciones.slice(0, 4)
+        : [],
+      cruces: Array.isArray(product.cruces)
+        ? product.cruces.slice(0, 4)
+        : [],
+    })),
+    instruccion_respuesta:
+      "Responder como asesor: explicar que puede haber cruces, pero no confirmar que sí queda. Pedir año/motor/código o muestra física. Máximo 4 oraciones.",
+  };
+}
+
+export function buildCrossApplicationComparisonLocalAnswer({
+  products = [],
+  intent = {},
+} = {}) {
+  const crossData = getCrossApplicationData(intent);
+  const targetText = buildCrossVehicleText(crossData.vehiculo_objetivo || {
+    marca: intent.marca_auto,
+    modelo: intent.modelo_auto,
+    anio: intent.anio,
+    motor: intent.motor,
+  });
+
+  const donorText = buildCrossVehicleText(crossData.vehiculo_donante || {});
+  const partText =
+    Array.isArray(crossData.pieza) && crossData.pieza.length
+      ? crossData.pieza.join(", ")
+      : "la pieza";
+
+  const foundText = products.length
+    ? "Voy a comparar contra las opciones encontradas en catálogo, pero la validación final depende de aplicación, años, motor y cruces."
+    : "No encontré una coincidencia suficiente en catálogo para confirmarlo automáticamente.";
+
+  return [
+    `Lo tomaría como comparación de aplicación: ${partText} de ${donorText || "otro vehículo"} contra ${targetText || "tu vehículo"}.`,
+    "No conviene confirmar que sí queda solo por nombre comercial; Chevy y Corsa pueden compartir algunas referencias, pero depende de año, motor, código y aplicación registrada.",
+    foundText,
+    "Pásame año/motor del Chevy o el código de la bomba del Corsa para validarlo mejor; ventas confirma compatibilidad final.",
+  ].join(" ");
+}

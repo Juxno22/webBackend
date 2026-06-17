@@ -1031,6 +1031,200 @@ function inferBrandFromModel(modelo) {
   return MODEL_BRAND_HINTS.get(cleanModel) || null;
 }
 
+const CROSS_APP_MODEL_HINTS = new Map([
+  // -------------------- CHEVROLET --------------------
+  ["CHEVY", { marca: "CHEVROLET", modelo: "CHEVY" }],
+  ["CORSA", { marca: "CHEVROLET", modelo: "CORSA" }],
+  ["AVEO", { marca: "CHEVROLET", modelo: "AVEO" }],
+  ["SPARK", { marca: "CHEVROLET", modelo: "SPARK" }],
+  ["TRAX", { marca: "CHEVROLET", modelo: "TRAX" }],
+  ["CRUZE", { marca: "CHEVROLET", modelo: "CRUZE" }],
+  ["ONIX", { marca: "CHEVROLET", modelo: "ONIX" }],
+  ["BEAT", { marca: "CHEVROLET", modelo: "BEAT" }],
+  ["CAPTIVA", { marca: "CHEVROLET", modelo: "CAPTIVA" }],
+  ["EQUINOX", { marca: "CHEVROLET", modelo: "EQUINOX" }],
+  ["S10", { marca: "CHEVROLET", modelo: "S10" }],
+  ["MONTANA", { marca: "CHEVROLET", modelo: "MONTANA" }],
+  ["BLAZER", { marca: "CHEVROLET", modelo: "BLAZER" }],
+  ["SILVERADO", { marca: "CHEVROLET", modelo: "SILVERADO" }],
+
+  // -------------------- NISSAN --------------------
+  ["TSURU", { marca: "NISSAN", modelo: "TSURU" }],
+  ["MARCH", { marca: "NISSAN", modelo: "MARCH" }],
+  ["VERSA", { marca: "NISSAN", modelo: "VERSA" }],
+  ["SENTRA", { marca: "NISSAN", modelo: "SENTRA" }],
+  ["ALTIMA", { marca: "NISSAN", modelo: "ALTIMA" }],
+  ["KICKS", { marca: "NISSAN", modelo: "KICKS" }],
+  ["FRONTIER", { marca: "NISSAN", modelo: "FRONTIER" }],
+  ["NP300", { marca: "NISSAN", modelo: "NP300" }],
+  ["XTRAIL", { marca: "NISSAN", modelo: "X-TRAIL" }],
+  ["PATHFINDER", { marca: "NISSAN", modelo: "PATHFINDER" }],
+  ["MURANO", { marca: "NISSAN", modelo: "MURANO" }],
+
+  // -------------------- VOLKSWAGEN --------------------
+  ["JETTA", { marca: "VOLKSWAGEN", modelo: "JETTA" }],
+  ["POINTER", { marca: "VOLKSWAGEN", modelo: "POINTER" }],
+  ["AMAROK", { marca: "VOLKSWAGEN", modelo: "AMAROK" }],
+  ["GOL", { marca: "VOLKSWAGEN", modelo: "GOL" }],
+  ["POLO", { marca: "VOLKSWAGEN", modelo: "POLO" }],
+  ["VENTO", { marca: "VOLKSWAGEN", modelo: "VENTO" }],
+  ["VIRTUS", { marca: "VOLKSWAGEN", modelo: "VIRTUS" }],
+  ["TIGUAN", { marca: "VOLKSWAGEN", modelo: "TIGUAN" }],
+  ["T-CROSS", { marca: "VOLKSWAGEN", modelo: "T-CROSS" }],
+  ["TAOS", { marca: "VOLKSWAGEN", modelo: "TAOS" }],
+  ["SAVEIRO", { marca: "VOLKSWAGEN", modelo: "SAVEIRO" }],
+
+  // -------------------- TOYOTA --------------------
+  ["COROLLA", { marca: "TOYOTA", modelo: "COROLLA" }],
+  ["YARIS", { marca: "TOYOTA", modelo: "YARIS" }],
+  ["CAMRY", { marca: "TOYOTA", modelo: "CAMRY" }],
+  ["HILUX", { marca: "TOYOTA", modelo: "HILUX" }],
+  ["RAV4", { marca: "TOYOTA", modelo: "RAV4" }],
+  ["SIENNA", { marca: "TOYOTA", modelo: "SIENNA" }],
+  ["TACOMA", { marca: "TOYOTA", modelo: "TACOMA" }],
+
+  // -------------------- HONDA --------------------
+  ["CIVIC", { marca: "HONDA", modelo: "CIVIC" }],
+  ["ACCORD", { marca: "HONDA", modelo: "ACCORD" }],
+  ["CRV", { marca: "HONDA", modelo: "CR-V" }],
+  ["HRV", { marca: "HONDA", modelo: "HR-V" }],
+  ["FIT", { marca: "HONDA", modelo: "FIT" }],
+  ["PILOT", { marca: "HONDA", modelo: "PILOT" }],
+
+  // -------------------- FORD --------------------
+  ["FOCUS", { marca: "FORD", modelo: "FOCUS" }],
+  ["RANGER", { marca: "FORD", modelo: "RANGER" }],
+  ["FIESTA", { marca: "FORD", modelo: "FIESTA" }],
+  ["MUSTANG", { marca: "FORD", modelo: "MUSTANG" }],
+  ["BRONCO", { marca: "FORD", modelo: "BRONCO" }],
+  ["EXPLORER", { marca: "FORD", modelo: "EXPLORER" }],
+  ["MAVERICK", { marca: "FORD", modelo: "MAVERICK" }],
+  ["TRANSIT", { marca: "FORD", modelo: "TRANSIT" }],
+
+  // -------------------- FIAT --------------------
+  ["PALIO", { marca: "FIAT", modelo: "PALIO" }],
+  ["UNO", { marca: "FIAT", modelo: "UNO" }],
+  ["ARGO", { marca: "FIAT", modelo: "ARGO" }],
+  ["CRONOS", { marca: "FIAT", modelo: "CRONOS" }],
+  ["STRADA", { marca: "FIAT", modelo: "STRADA" }],
+  ["TORO", { marca: "FIAT", modelo: "TORO" }],
+  ["PULSE", { marca: "FIAT", modelo: "PULSE" }],
+
+  // -------------------- RENAULT --------------------
+  ["LOGAN", { marca: "RENAULT", modelo: "LOGAN" }],
+  ["SANDERO", { marca: "RENAULT", modelo: "SANDERO" }],
+  ["DUSTER", { marca: "RENAULT", modelo: "DUSTER" }],
+  ["CAPTUR", { marca: "RENAULT", modelo: "CAPTUR" }],
+  ["KWID", { marca: "RENAULT", modelo: "KWID" }],
+  ["KOLEOS", { marca: "RENAULT", modelo: "KOLEOS" }],
+
+  // -------------------- PEUGEOT --------------------
+  ["208", { marca: "PEUGEOT", modelo: "208" }],
+  ["2008", { marca: "PEUGEOT", modelo: "2008" }],
+  ["301", { marca: "PEUGEOT", modelo: "301" }],
+  ["3008", { marca: "PEUGEOT", modelo: "3008" }],
+  ["PARTNER", { marca: "PEUGEOT", modelo: "PARTNER" }],
+
+  // -------------------- HYUNDAI --------------------
+  ["ACCENT", { marca: "HYUNDAI", modelo: "ACCENT" }],
+  ["ELANTRA", { marca: "HYUNDAI", modelo: "ELANTRA" }],
+  ["TUCSON", { marca: "HYUNDAI", modelo: "TUCSON" }],
+  ["CRETA", { marca: "HYUNDAI", modelo: "CRETA" }],
+  ["SANTAFE", { marca: "HYUNDAI", modelo: "SANTA FE" }],
+  ["KONA", { marca: "HYUNDAI", modelo: "KONA" }],
+
+  // -------------------- KIA --------------------
+  ["RIO", { marca: "KIA", modelo: "RIO" }],
+  ["SPORTAGE", { marca: "KIA", modelo: "SPORTAGE" }],
+  ["SOUL", { marca: "KIA", modelo: "SOUL" }],
+  ["SELTOS", { marca: "KIA", modelo: "SELTOS" }],
+  ["CERATO", { marca: "KIA", modelo: "CERATO" }],
+
+  // -------------------- MAZDA --------------------
+  ["MAZDA3", { marca: "MAZDA", modelo: "MAZDA 3" }],
+  ["MAZDA6", { marca: "MAZDA", modelo: "MAZDA 6" }],
+  ["CX3", { marca: "MAZDA", modelo: "CX-3" }],
+  ["CX5", { marca: "MAZDA", modelo: "CX-5" }],
+
+  // -------------------- SUZUKI --------------------
+  ["SWIFT", { marca: "SUZUKI", modelo: "SWIFT" }],
+  ["VITARA", { marca: "SUZUKI", modelo: "VITARA" }],
+  ["GRANDVITARA", { marca: "SUZUKI", modelo: "GRAND VITARA" }],
+
+  // -------------------- MITSUBISHI --------------------
+  ["LANCER", { marca: "MITSUBISHI", modelo: "LANCER" }],
+  ["OUTLANDER", { marca: "MITSUBISHI", modelo: "OUTLANDER" }],
+  ["L200", { marca: "MITSUBISHI", modelo: "L200" }],
+  ["ECLIPSE", { marca: "MITSUBISHI", modelo: "ECLIPSE" }],
+
+  // -------------------- JEEP / DODGE / RAM --------------------
+  ["COMPASS", { marca: "JEEP", modelo: "COMPASS" }],
+  ["RENEGADE", { marca: "JEEP", modelo: "RENEGADE" }],
+  ["WRANGLER", { marca: "JEEP", modelo: "WRANGLER" }],
+  ["GRANDCHEROKEE", { marca: "JEEP", modelo: "GRAND CHEROKEE" }],
+  ["RAM", { marca: "RAM", modelo: "RAM" }],
+  ["DURANGO", { marca: "DODGE", modelo: "DURANGO" }],
+  ["ATTITUDE", { marca: "DODGE", modelo: "ATTITUDE" }],
+
+  // -------------------- BMW / MERCEDES / AUDI (modelos comunes) --------------------
+  ["BMW-3", { marca: "BMW", modelo: "SERIE 3" }],
+  ["BMW-X1", { marca: "BMW", modelo: "X1" }],
+  ["MERCEDES-C", { marca: "MERCEDES-BENZ", modelo: "CLASE C" }],
+  ["AUDI-A3", { marca: "AUDI", modelo: "A3" }],
+  ["AUDI-Q5", { marca: "AUDI", modelo: "Q5" }],
+
+  // -------------------- MARCAS CHINAS (CADA VEZ MÁS COMUNES) --------------------
+  ["MG-ZS", { marca: "MG", modelo: "ZS" }],
+  ["MG-HS", { marca: "MG", modelo: "HS" }],
+  ["CHANGAN-CS35", { marca: "CHANGAN", modelo: "CS35" }],
+  ["CHANGAN-CS55", { marca: "CHANGAN", modelo: "CS55" }],
+  ["GEELY-EMGRAND", { marca: "GEELY", modelo: "EMGRAND" }],
+  ["GEELY-COOLRAY", { marca: "GEELY", modelo: "COOLRAY" }],
+]);
+
+function getCrossAppVehicleHint(token) {
+  const cleanToken = normalizeText(token);
+
+  return CROSS_APP_MODEL_HINTS.get(cleanToken) || null;
+}
+
+function detectCrossApplicationComparison(question, directProductTerms = []) {
+  const text = normalizeText(question);
+
+  const hasCrossQuestion =
+    /\bLE\s+PUEDO\s+PONER\b/.test(text) ||
+    /\bPUEDO\s+PONER\b/.test(text) ||
+    /\bSE\s+LE\s+PUEDE\s+PONER\b/.test(text) ||
+    /\bLE\s+QUEDA\b/.test(text) ||
+    /\bLE\s+SIRVE\b/.test(text);
+
+  if (!hasCrossQuestion) return null;
+
+  const targetMatch = text.match(/\bPARA\s+(?:MI\s+)?([A-Z0-9ÑÁÉÍÓÚ]+)\b/);
+  const donorMatch =
+    text.match(/\bDEL\s+([A-Z0-9ÑÁÉÍÓÚ]+)\b/) ||
+    text.match(/\bDE\s+(?:UN|UNA|EL|LA)\s+([A-Z0-9ÑÁÉÍÓÚ]+)\b/);
+
+  const targetVehicle = targetMatch
+    ? getCrossAppVehicleHint(targetMatch[1])
+    : null;
+
+  const donorVehicle = donorMatch
+    ? getCrossAppVehicleHint(donorMatch[1])
+    : null;
+
+  if (!targetVehicle && !donorVehicle) return null;
+
+  return {
+    activa: true,
+    tipo: "CROSS_APPLICATION_COMPARISON",
+    vehiculo_objetivo: targetVehicle,
+    vehiculo_donante: donorVehicle,
+    pieza: Array.isArray(directProductTerms) ? directProductTerms : [],
+    requiere_validacion_catalogo: true,
+  };
+}
+
 function isInvalidNumericVehicleModel(question, modelo) {
   const text = normalizeText(question);
   const cleanModel = normalizeText(modelo);
@@ -2068,6 +2262,10 @@ export async function buildIntent(question) {
     .flatMap((rule) => rule.tokens);
 
   const directProductTerms = detectDirectProductTerms(question);
+  const crossApplicationComparison = detectCrossApplicationComparison(
+    question,
+    directProductTerms
+  );
   const expansionTokens = getExpansionTokens(question);
   const productQueryTokens = buildProductQueryTokens({
     directProductTerms,
@@ -2093,6 +2291,8 @@ export async function buildIntent(question) {
     .filter((token) => !isExcludedValue(token, excludedTokens))
     .slice(0, 32);
 
+  const vehicleForIntent = crossApplicationComparison?.vehiculo_objetivo || vehicle;
+
   return {
     pregunta_normalizada: normalizedQuestion,
     anio: extractYear(question),
@@ -2113,8 +2313,9 @@ export async function buildIntent(question) {
       searchable: rule.searchable,
     })),
     terminos_producto_detectados: directProductTerms,
-    marca_auto: vehicle.marca,
-    modelo_auto: vehicle.modelo,
+    marca_auto: vehicleForIntent?.marca || vehicle.marca,
+    modelo_auto: vehicleForIntent?.modelo || vehicle.modelo,
+    comparacion_aplicacion: crossApplicationComparison,
     preferencias_comerciales: commercialPreferences,
     condiciones_detectadas: conditionWarnings,
     medidas_detectadas: measurementFilters,
