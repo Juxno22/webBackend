@@ -43,6 +43,18 @@ function uniqueByKey(items = [], keyFn) {
   return result;
 }
 
+function finalizeMeasurementFilters(filters = []) {
+  return uniqueByKey(
+    filters
+      .filter((item) => item.tipo === "TEXT_ATTRIBUTE" || Number.isFinite(Number(item.valor_numero)))
+      .sort((a, b) => Number(b.prioridad || 0) - Number(a.prioridad || 0)),
+    (item) =>
+      item.tipo === "TEXT_ATTRIBUTE"
+        ? `${item.tipo}:${item.atributo_normalizado}:${item.valor_normalizado}`
+        : `${item.tipo}:${item.atributo_normalizado}:${item.valor_numero}:${item.unidad}`
+  ).slice(0, 12);
+}
+
 function normalizePrettyNumber(value) {
   const number = Number(value);
 
@@ -60,10 +72,11 @@ function makeNumericFilter({
   tolerancia = 0.75,
   aplicar_filtro = true,
   prioridad = 50,
+  contexto = "POLEA",
 }) {
   return {
     tipo: "NUMERIC_ATTRIBUTE",
-    contexto: "POLEA",
+    contexto,
     atributo_normalizado: normalizeText(atributo_normalizado),
     atributo_label,
     valor_numero: Number(Number(valor_numero).toFixed(3)),
@@ -82,10 +95,11 @@ function makeTextFilter({
   original = "",
   aplicar_filtro = false,
   prioridad = 20,
+  contexto = "POLEA",
 }) {
   return {
     tipo: "TEXT_ATTRIBUTE",
-    contexto: "POLEA",
+    contexto,
     atributo_normalizado: normalizeText(atributo_normalizado),
     atributo_label,
     valor_texto: String(valor_texto || "").trim(),
@@ -121,6 +135,53 @@ function addMeasurementMatches({ text, filters, patterns, atributo_normalizado, 
       );
     }
   }
+}
+
+function detectCapMeasurements(text, filters) {
+  const pressurePatterns = [
+    /\b(?<value>\d{1,3}(?:[.,]\d{1,2})?)\s*(?<unit>PSI|LIBRAS?)\b/g,
+    /\bPRESION\s+(?:DE\s+)?(?<value>\d{1,3}(?:[.,]\d{1,2})?)\s*(?<unit>PSI|LIBRAS?)\b/g,
+    /\bPRESIÓN\s+(?:DE\s+)?(?<value>\d{1,3}(?:[.,]\d{1,2})?)\s*(?<unit>PSI|LIBRAS?)\b/g,
+  ];
+
+  for (const pattern of pressurePatterns) {
+    let match;
+
+    while ((match = pattern.exec(text)) !== null) {
+      const value = cleanNumber(match.groups?.value || match[1]);
+
+      if (!Number.isFinite(value)) continue;
+
+      filters.push(
+        makeNumericFilter({
+          atributo_normalizado: "PRESION",
+          atributo_label: "presión",
+          valor_numero: value,
+          unidad: "PSI",
+          original: match[0],
+          tolerancia: 0,
+          aplicar_filtro: true,
+          prioridad: 105,
+          contexto: "TAPON",
+        })
+      );
+    }
+  }
+
+  addMeasurementMatches({
+    text,
+    filters,
+    atributo_normalizado: "DIAMETRO",
+    atributo_label: "diámetro",
+    aplicar_filtro: true,
+    prioridad: 95,
+    tolerancia: 0.75,
+    patterns: [
+      /\b(?<value>\d{1,3}(?:[.,]\d{1,3})?)\s*(?<unit>MM|MILIMETROS|MILÍMETROS|CM|PULGADAS?|IN|")\s+DE\s+DIAMETRO\b/g,
+      /\bDIAMETRO\s+(?:DE\s+)?(?<value>\d{1,3}(?:[.,]\d{1,3})?)\s*(?<unit>MM|MILIMETROS|MILÍMETROS|CM|PULGADAS?|IN|")\b/g,
+      /\bDIÁMETRO\s+(?:DE\s+)?(?<value>\d{1,3}(?:[.,]\d{1,3})?)\s*(?<unit>MM|MILIMETROS|MILÍMETROS|CM|PULGADAS?|IN|")\b/g,
+    ],
+  });
 }
 
 function detectPulleyKind(text, filters) {
@@ -334,6 +395,8 @@ export function getMeasurementAttributeAliases(attributeName) {
     CANALES: ["CANALES", "RANURAS", "COSTILLAS", "NUMERO_CANALES", "NUMERO CANALES"],
     "TORNILLOS MONTAJE": ["TORNILLOS MONTAJE", "PERNOS MONTAJE", "TORNILLOS", "PERNOS"],
     "CIRCULO PERNOS": ["CIRCULO PERNOS", "CIRCULO DE PERNOS", "PCD"],
+    PRESION: ["PRESION", "PRESIÓN", "PSI", "LIBRAS"],
+    PSI: ["PSI", "PRESION", "PRESIÓN", "LIBRAS"],
   };
 
   return aliasMap[key] || [key];
@@ -343,10 +406,21 @@ export function detectMeasurementFilters(question) {
   const text = normalizeText(question);
   const hasPulleyIntent =
     /\bPOLEA\b|\bPOLEAS\b|\bPULLEY\b|\bPULLEYS\b/.test(text);
+  const hasCapIntent =
+    (/\bTAPON\b|\bTAPÓN\b/.test(text) && (/\bRADIADOR\b|\bDEPOSITO\b|\bDEPÓSITO\b/.test(text))) ||
+    (/\bPSI\b|\bLIBRAS\b/.test(text) && (/\bTAPON\b|\bTAPÓN\b/.test(text)));
 
-  if (!hasPulleyIntent) return [];
+  if (!hasPulleyIntent && !hasCapIntent) return [];
 
   const filters = [];
+
+  if (hasCapIntent) {
+    detectCapMeasurements(text, filters);
+  }
+
+  if (!hasPulleyIntent) {
+    return finalizeMeasurementFilters(filters);
+  }
 
   detectPulleyKind(text, filters);
   detectBeltType(text, filters);
@@ -543,15 +617,7 @@ export function detectMeasurementFilters(question) {
     });
   }
 
-  return uniqueByKey(
-    filters
-      .filter((item) => item.tipo === "TEXT_ATTRIBUTE" || Number.isFinite(Number(item.valor_numero)))
-      .sort((a, b) => Number(b.prioridad || 0) - Number(a.prioridad || 0)),
-    (item) =>
-      item.tipo === "TEXT_ATTRIBUTE"
-        ? `${item.tipo}:${item.atributo_normalizado}:${item.valor_normalizado}`
-        : `${item.tipo}:${item.atributo_normalizado}:${item.valor_numero}:${item.unidad}`
-  ).slice(0, 12);
+  return finalizeMeasurementFilters(filters);
 }
 
 export function attributeMatchesMeasurement(attribute = {}, measurement = {}) {
