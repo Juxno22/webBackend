@@ -126,6 +126,18 @@ export function buildProductComparisonEvidence({ products = [] } = {}) {
 
 export function buildProductComparisonLocalAnswer({ products = [], intent = {} } = {}) {
   if (!products.length) {
+    const codes = Array.isArray(intent.numero_parte_tokens)
+      ? intent.numero_parte_tokens
+      : [];
+
+    if (codes.length >= 2) {
+      return [
+        `Detecté los códigos ${codes.join(" y ")}, pero no encontré ambos en catálogo para compararlos con seguridad.`,
+        "Para comparar bien necesito que los códigos existan en catálogo o tener foto, marca, descripción o aplicación de cada pieza.",
+        "Ventas puede validarlos manualmente y confirmar compatibilidad final.",
+      ].join(" ");
+    }
+
     return [
       "No encontré productos reales suficientes en el catálogo para comparar.",
       "Para comparar bien necesito códigos, pieza exacta o datos del vehículo.",
@@ -135,11 +147,15 @@ export function buildProductComparisonLocalAnswer({ products = [], intent = {} }
 
   if (products.length === 1) {
     const only = products[0];
+    const codes = Array.isArray(intent.numero_parte_tokens)
+      ? intent.numero_parte_tokens
+      : [];
 
     return [
-      `Encontré una opción principal: ${productCode(only)} - ${productTitle(only)}.`,
-      `En catálogo aparece como ${only.familia || only.categoria || "refacción"} y tiene compatibilidad estimada de ${only.compatibilidad_estimada || "N/D"}%.`,
-      "Para comparar necesito otra opción, código o marca contra la cual revisarla.",
+      `Solo encontré una opción relacionada en catálogo: ${productCode(only)} - ${productTitle(only)}.`,
+      codes.length >= 2
+        ? `No encontré suficiente información del otro código (${codes.join(" / ")}) para hacer una comparación completa.`
+        : "Para comparar necesito otra opción, código o marca contra la cual revisarla.",
       "Ventas valida compatibilidad y disponibilidad final.",
     ].join(" ");
   }

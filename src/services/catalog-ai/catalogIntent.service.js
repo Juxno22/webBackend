@@ -943,53 +943,43 @@ function getExpansionTokens(question) {
   return unique(expansions);
 }
 
-function extractExcludedTerms(question) {
+function extractProductBrandExclusions(question) {
   const text = normalizeText(question);
   const excluded = [];
 
   const patterns = [
-    /\bQUE\s+NO\s+SEA\s+PARA\s+([A-Z0-9ÁÉÍÓÚÑ]+)/g,
-    /\bQUE\s+NO\s+SEA\s+DE\s+([A-Z0-9ÁÉÍÓÚÑ]+)/g,
-    /\bQUE\s+NO\s+SEA\s+([A-Z0-9ÁÉÍÓÚÑ]+)/g,
-    /\bNO\s+SEA\s+PARA\s+([A-Z0-9ÁÉÍÓÚÑ]+)/g,
-    /\bNO\s+SEA\s+DE\s+([A-Z0-9ÁÉÍÓÚÑ]+)/g,
-    /\bNO\s+SEA\s+([A-Z0-9ÁÉÍÓÚÑ]+)/g,
-    /\bNO\s+PARA\s+([A-Z0-9ÁÉÍÓÚÑ]+)/g,
-    /\bNO\s+DE\s+([A-Z0-9ÁÉÍÓÚÑ]+)/g,
-    /\bEXCEPTO\s+([A-Z0-9ÁÉÍÓÚÑ]+)/g,
-    /\bSIN\s+([A-Z0-9ÁÉÍÓÚÑ]+)/g,
-    /\bNOT\s+FOR\s+([A-Z0-9ÁÉÍÓÚÑ]+)/g,
+    /\bQUE\s+NO\s+SEA\s+DE\s+MARCA\s+([A-Z0-9ÁÉÍÓÚÑ]+)/g,
+    /\bNO\s+SEA\s+DE\s+MARCA\s+([A-Z0-9ÁÉÍÓÚÑ]+)/g,
+    /\bNO\s+MARCA\s+([A-Z0-9ÁÉÍÓÚÑ]+)/g,
+    /\bPREFIERO\s+(?:UNA\s+)?ALTERNATIVA\b/g,
+    /\bALTERNATIVA\b/g,
+    /\bNO\s+ORIGINAL\b/g,
+    /\bGENERICO\b/g,
+    /\bGENÉRICO\b/g,
   ];
-
-  const ignoredExclusions = new Set([
-    "ORIGINAL",
-    "GENERICA",
-    "GENÉRICA",
-    "GENERICO",
-    "GENÉRICO",
-    "BARATA",
-    "BARATO",
-    "ECONOMICA",
-    "ECONÓMICA",
-    "ECONOMICO",
-    "ECONÓMICO",
-  ]);
 
   for (const pattern of patterns) {
     let match;
 
     while ((match = pattern.exec(text)) !== null) {
-      const value = normalizeText(match[1]);
+      if (match[1]) {
+        const value = normalizeText(match[1]);
 
-      if (
-        value &&
-        value.length >= 3 &&
-        !STOP_WORDS.has(value) &&
-        !ignoredExclusions.has(value)
-      ) {
-        excluded.push(value);
+        if (value && value.length >= 3 && !STOP_WORDS.has(value)) {
+          excluded.push(value);
+        }
       }
     }
+  }
+
+  if (
+    /\bPREFIERO\s+(?:UNA\s+)?ALTERNATIVA\b/.test(text) ||
+    /\bALTERNATIVA\b/.test(text) ||
+    /\bNO\s+ORIGINAL\b/.test(text) ||
+    /\bGENERICO\b/.test(text) ||
+    /\bGENÉRICO\b/.test(text)
+  ) {
+    excluded.push("ORIGINAL");
   }
 
   return unique(excluded).slice(0, 6);
@@ -2511,7 +2501,38 @@ function detectPositionTerms(question) {
   return unique(positions);
 }
 
+function hasThermostatTemperatureComparison(question) {
+  const text = normalizeText(question);
+
+  return (
+    /\bTERMOSTATO\b/.test(text) &&
+    (
+      /\bDIFERENCIA\b/.test(text) ||
+      /\bCOMPARA\b/.test(text) ||
+      /\bVS\b/.test(text) ||
+      /\bENTRE\b/.test(text)
+    ) &&
+    /\b(7[0-9]|8[0-9]|9[0-9])\s*(°|GRADOS|C)?\b/.test(text)
+  );
+}
+
+function extractTemperatureCandidates(question) {
+  const text = normalizeText(question);
+  const matches = text.match(/\b(7[0-9]|8[0-9]|9[0-9])\s*(°|GRADOS|C)?\b/g) || [];
+
+  return unique(
+    matches
+      .map((item) => {
+        const value = String(item).match(/\d+/)?.[0];
+        return value ? Number(value) : null;
+      })
+      .filter((value) => Number.isFinite(value))
+  );
+}
+
 export async function buildIntent(question) {
+  const thermostatTemperatureComparison = hasThermostatTemperatureComparison(question);
+  const temperaturas_detectadas = extractTemperatureCandidates(question);
   const normalizedQuestion = normalizeSearchQuery(question);
   const excludedTokens = extractExcludedTerms(question);
   const localExclusionScope = classifyLocalExclusionsByScope(
@@ -2546,6 +2567,7 @@ export async function buildIntent(question) {
     directProductTerms
   );
   const expansionTokens = getExpansionTokens(question);
+  const productBrandExclusions = extractProductBrandExclusions(question);
   const productQueryTokens = buildProductQueryTokens({
     directProductTerms,
     expansionTokens: [...expansionTokens, ...positionTerms],
@@ -2587,7 +2609,7 @@ export async function buildIntent(question) {
     tokens,
     excluded_tokens: localExclusionScope.vehicle,
     excluded_vehicle_tokens: localExclusionScope.vehicle,
-    excluded_product_brand_tokens: localExclusionScope.productBrand,
+    excluded_product_brand_tokens: productBrandExclusions,
     has_negation:
       localExclusionScope.vehicle.length > 0 ||
       localExclusionScope.productBrand.length > 0,
@@ -2610,5 +2632,7 @@ export async function buildIntent(question) {
     product_query_tokens: productQueryTokens,
     strict_product_family_tokens: strictProductFamilyTokens,
     posiciones_detectadas: positionTerms,
+    comparacion_temperatura_termostato: thermostatTemperatureComparison,
+    temperaturas_detectadas,
   };
 }

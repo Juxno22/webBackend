@@ -75,12 +75,16 @@ function buildDiagnosticGuideAnswer({ intent = {}, sessionContext = {} }) {
   }
 
   if (symptomKeys.includes("COOLING_LEAK")) {
+    const vehicleText = buildVehicleText(intent);
+
     return [
-      "Ese síntoma puede estar relacionado con mangueras, radiador, depósito, tapón, toma de agua o bomba de agua.",
       vehicleText
-        ? `Como veníamos con ${vehicleText}, dime si la fuga viene del frente, del depósito, de una manguera o debajo del motor para orientar mejor la búsqueda.`
-        : "Para buscar una pieza correcta necesito marca, modelo, año y motor; también ayuda saber de dónde tira el líquido.",
-      "Ventas valida compatibilidad y disponibilidad final.",
+        ? `Para ${vehicleText}, una fuga de anticongelante por abajo puede venir de varias zonas del sistema de enfriamiento.`
+        : "Una fuga de anticongelante por abajo puede venir de varias zonas del sistema de enfriamiento.",
+      "Lo más común a revisar es manguera, radiador, depósito, toma/brida, bomba de agua, tapón o abrazaderas.",
+      vehicleText
+        ? "Dime solo por qué zona tira: frente, centro, lado del motor o cerca del radiador, y te muestro opciones orientativas."
+        : "Dime marca, modelo y año para mostrarte opciones orientativas.",
     ].join(" ");
   }
 
@@ -142,6 +146,23 @@ function buildComparisonGuideAnswer({ intent = {} }) {
   const mentionsDepositCap = hasTerm(intent, /TAPON.*DEPOSITO|TAPÓN.*DEPÓSITO|TAPON.*DEPÓSITO|TAPÓN.*DEPOSITO/);
 
   const normalizedQuestion = String(intent.pregunta_normalizada || "").toUpperCase();
+
+  if (intent.comparacion_temperatura_termostato) {
+    const temps = Array.isArray(intent.temperaturas_detectadas)
+      ? intent.temperaturas_detectadas
+      : [];
+
+    const sortedTemps = [...temps].sort((a, b) => a - b);
+    const low = sortedTemps[0] || 82;
+    const high = sortedTemps[1] || 87;
+
+    return [
+      `La diferencia entre un termostato de ${low}° y uno de ${high}° es la temperatura aproximada a la que empieza a abrir.`,
+      `El de ${low}° abre antes; el de ${high}° deja que el motor trabaje un poco más caliente antes de abrir.`,
+      "No se elige por cuál es mejor, sino por la especificación del motor y la aplicación registrada.",
+      "Para cotizar uno correcto sí conviene validar marca, modelo, año y motor.",
+    ].join(" ");
+  }
 
   if (
     mentionsThermostat &&

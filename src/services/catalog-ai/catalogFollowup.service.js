@@ -234,6 +234,28 @@ function buildDiagnosticFollowup({ intent = {} } = {}) {
     const missingVehicle = compactMissingVehicle(missingVehicleFields);
     const vehicleQuestions = buildVehicleMissingQuestions(intent, missingVehicleFields);
 
+    if (
+        hasLeak &&
+        (intent.marca_auto || intent.modelo_auto || intent.anio)
+    ) {
+        return makeFollowup({
+            requiereSeguimiento: true,
+            bloqueante: false,
+            siguienteAccion: "ASK_LEAK_ZONE",
+            datosFaltantes: ["zona_fuga"],
+            preguntas: [
+                "¿Por qué zona tira el anticongelante: frente, centro, lado del motor o cerca del radiador?",
+            ],
+            respuestasRapidas: [
+                "Frente del motor",
+                "Centro/abajo",
+                "Cerca del radiador",
+                "No sé",
+            ],
+            maxPreguntas: 1,
+        });
+    }
+
     if (beginner && advisorTurns >= 2) {
         return makeFollowup({
             requiereSeguimiento: true,
@@ -372,7 +394,7 @@ function buildProductSearchFollowup({ intent = {}, products = [] } = {}) {
             maxPreguntas: 1,
         });
     }
-    
+
     if (products.length > 0) {
         return makeFollowup({
             requiereSeguimiento: false,
@@ -570,6 +592,17 @@ export function buildCatalogFollowup({
     const hasProducts = Array.isArray(products) && products.length > 0;
 
     if (gateReason === "PRODUCT_CONCEPT_EXPLANATION") {
+        return makeFollowup({
+            requiereSeguimiento: false,
+            bloqueante: false,
+            siguienteAccion: "NONE",
+            datosFaltantes: [],
+            preguntas: [],
+            respuestasRapidas: [],
+        });
+    }
+
+    if (gateReason === "THERMOSTAT_TEMPERATURE_COMPARISON") {
         return makeFollowup({
             requiereSeguimiento: false,
             bloqueante: false,

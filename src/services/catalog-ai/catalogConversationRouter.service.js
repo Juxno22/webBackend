@@ -224,6 +224,15 @@ export function routeCatalogConversation({ question, intent = {}, sessionContext
   const hasSymptoms = hasAny(intent.sintomas_detectados);
   const hasCodes = hasAny(intent.numero_parte_tokens);
 
+  if (intent.comparacion_temperatura_termostato) {
+    return {
+      mode: CATALOG_CONVERSATION_MODES.COMPARISON_GUIDE,
+      reason: "THERMOSTAT_TEMPERATURE_COMPARISON",
+      shouldSearchCatalog: false,
+      requiresMoreData: false,
+    };
+  }
+
   if (hasCrossApplicationComparison(question, intent)) {
     return {
       mode: CATALOG_CONVERSATION_MODES.PRODUCT_COMPARISON,
@@ -287,6 +296,21 @@ export function routeCatalogConversation({ question, intent = {}, sessionContext
       shouldSearchCatalog: false,
       requiresMoreData: !hasVehicle,
       hasSymptoms,
+    };
+  }
+
+  const text = normalizeText(question);
+
+  if (
+    Array.isArray(intent.numero_parte_tokens) &&
+    intent.numero_parte_tokens.length >= 2 &&
+    (/\bCOMPARA\b/.test(text) || /\bVS\b/.test(text))
+  ) {
+    return {
+      mode: CATALOG_CONVERSATION_MODES.PRODUCT_COMPARISON,
+      reason: "PART_NUMBER_COMPARISON",
+      shouldSearchCatalog: true,
+      requiresMoreData: false,
     };
   }
 

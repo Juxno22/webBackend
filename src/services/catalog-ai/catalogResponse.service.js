@@ -215,7 +215,7 @@ export function buildLocalAnswer({ intent, products }) {
   const productBrandExclusionText =
     Array.isArray(intent.excluded_product_brand_tokens) &&
       intent.excluded_product_brand_tokens.length
-      ? `Tomé en cuenta que buscas una alternativa o una opción no original. La marca/fabricante final de la pieza debe validarla ventas.`
+      ? "Tomé en cuenta que buscas una alternativa o una opción no original. La marca/fabricante final de la pieza debe validarla ventas."
       : "";
 
   if (intent.modo_busqueda === "EXPLORATORY") {
