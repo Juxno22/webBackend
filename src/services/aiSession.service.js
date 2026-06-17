@@ -68,6 +68,34 @@ export function shouldResetSearchSession(question) {
     );
 }
 
+export function extractQuestionAfterSessionReset(question) {
+  const raw = cleanString(question);
+
+  if (!raw) return null;
+
+  const patterns = [
+    /^\s*olvida\s+(el\s+)?(auto|carro|coche|vehiculo|vehículo)(\s+anterior|\s+previo)?\s*,?\s*(ahora\s+)?/i,
+    /^\s*borra\s+(el\s+)?(auto|carro|coche|vehiculo|vehículo)(\s+anterior|\s+previo)?\s*,?\s*(ahora\s+)?/i,
+    /^\s*cambia(r)?\s+(el\s+)?(auto|carro|coche|vehiculo|vehículo)\s*,?\s*(ahora\s+)?/i,
+  ];
+
+  let next = raw;
+
+  for (const pattern of patterns) {
+    next = next.replace(pattern, "").trim();
+  }
+
+  next = next
+    .replace(/^\s*(ahora\s+)?(busco|quiero|necesito|ocupo)\s+/i, (match) =>
+      match.trim().toLowerCase().startsWith("ahora")
+        ? match.replace(/^\s*ahora\s+/i, "")
+        : match
+    )
+    .trim();
+
+  return next.length >= 3 ? next : null;
+}
+
 export async function resetSearchSession(rawSessionId) {
     const sessionId = sanitizeSessionId(rawSessionId);
 

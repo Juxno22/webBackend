@@ -10,6 +10,7 @@ import {
   resetSearchSession,
   shouldResetSearchSession,
   hasVehicleContext,
+  extractQuestionAfterSessionReset,
 } from "./aiSession.service.js";
 import { cleanString } from "./catalog-ai/catalogUtils.service.js";
 import {
@@ -143,12 +144,12 @@ async function answerAdvisorMode({
   const updatedContext = ignoreSessionContext
     ? {}
     : await updateSearchSessionContext({
-      sessionId: session.session_id,
-      previousContext: session.contexto,
-      intent: advisoryIntent,
-      question: cleanQuestion,
-      origen,
-    });
+        sessionId: session.session_id,
+        previousContext: session.contexto,
+        intent: advisoryIntent,
+        question: cleanQuestion,
+        origen,
+      });
 
   const effectiveIntent = {
     ...advisoryIntent,
@@ -256,23 +257,23 @@ async function runProductSearch({ cleanQuestion, effectiveIntent, origen }) {
 
     advisorEvidence = isCrossApplicationComparison
       ? buildCrossApplicationComparisonEvidence({
-        products: recommended,
-        intent: effectiveIntent,
-      })
+          products: recommended,
+          intent: effectiveIntent,
+        })
       : buildProductComparisonEvidence({
-        products: recommended,
-        intent: effectiveIntent,
-      });
+          products: recommended,
+          intent: effectiveIntent,
+        });
 
     answer = isCrossApplicationComparison
       ? buildCrossApplicationComparisonLocalAnswer({
-        products: recommended,
-        intent: effectiveIntent,
-      })
+          products: recommended,
+          intent: effectiveIntent,
+        })
       : buildProductComparisonLocalAnswer({
-        products: recommended,
-        intent: effectiveIntent,
-      });
+          products: recommended,
+          intent: effectiveIntent,
+        });
 
     useAdvisorWriter = recommended.length > 0 || isCrossApplicationComparison;
   }
@@ -296,23 +297,23 @@ async function runProductSearch({ cleanQuestion, effectiveIntent, origen }) {
     try {
       const aiResult = useAdvisorWriter
         ? await generateAiAdvisorAnswer({
-          messages: buildAdvisorAiMessages({
-            question: cleanQuestion,
-            mode: conversationMode,
-            route: effectiveIntent.conversation_route,
-            intent: effectiveIntent,
-            sessionContext: effectiveIntent.contexto_corto || {},
-            products: recommended,
-            evidence: advisorEvidence,
-          }),
-        })
+            messages: buildAdvisorAiMessages({
+              question: cleanQuestion,
+              mode: conversationMode,
+              route: effectiveIntent.conversation_route,
+              intent: effectiveIntent,
+              sessionContext: effectiveIntent.contexto_corto || {},
+              products: recommended,
+              evidence: advisorEvidence,
+            }),
+          })
         : await generateAiAnswer({
-          messages: buildAiMessages({
-            question: cleanQuestion,
-            intent: effectiveIntent,
-            products: recommended,
-          }),
-        });
+            messages: buildAiMessages({
+              question: cleanQuestion,
+              intent: effectiveIntent,
+              products: recommended,
+            }),
+          });
 
       service = aiResult.service || service;
 
@@ -367,28 +368,33 @@ export async function searchCatalogWithAi({
     throw error;
   }
 
+  let effectiveQuestion = cleanQuestion;
+  let forcedSessionId = rawSessionId;
+  let sessionWasReset = false;
+
   if (shouldResetSearchSession(cleanQuestion)) {
-    const sessionId = await resetSearchSession(rawSessionId);
+    const resetSessionId = await resetSearchSession(rawSessionId);
+    const nextQuestion = extractQuestionAfterSessionReset(cleanQuestion);
 
-    const answer =
-      "Listo, borré el vehículo guardado para esta búsqueda. Dime el nuevo vehículo o la pieza que necesitas.";
+    if (!nextQuestion) {
+      const answer =
+        "Listo, borré el vehículo guardado para esta búsqueda. Dime el nuevo vehículo o la pieza que necesitas.";
 
-    await logAiSearch({
-      question: cleanQuestion,
-      intent: {
-        gate_reason: "SESSION_CONTEXT_RESET",
-      },
-      candidates: [],
-      recommended: [],
-      service: "LOCAL_CONTROLADO",
-      response: answer,
-      origen,
-    });
+      await logAiSearch({
+        question: cleanQuestion,
+        intent: {
+          gate_reason: "SESSION_CONTEXT_RESET",
+        },
+        candidates: [],
+        recommended: [],
+        service: "LOCAL_CONTROLADO",
+        response: answer,
+        origen,
+      });
 
-    return addFollowupToCatalogResult(
-      {
+      return {
         ok: true,
-        session_id: sessionId,
+        session_id: resetSessionId,
         intencion: {
           gate_reason: "SESSION_CONTEXT_RESET",
         },
@@ -399,24 +405,20 @@ export async function searchCatalogWithAi({
         productos: [],
         requiere_mas_datos: true,
         contexto_corto: {},
-      },
-      {
-        question: cleanQuestion,
-        intent: {
-          gate_reason: "SESSION_CONTEXT_RESET",
-        },
-        mode: "SESSION_CONTEXT_RESET",
-        products: [],
-      }
-    );
+      };
+    }
+
+    effectiveQuestion = nextQuestion;
+    forcedSessionId = resetSessionId;
+    sessionWasReset = true;
   }
 
-  if (asksForFutureStock(cleanQuestion)) {
+  if (asksForFutureStock(effectiveQuestion)) {
     const answer =
       "Por ahora no tengo información confiable sobre fechas futuras de reabastecimiento. Puedo ayudarte a ubicar la pieza en el catálogo y ventas puede validar disponibilidad actual o próxima llegada.";
 
     await logAiSearch({
-      question: cleanQuestion,
+      question: effectiveQuestion,
       intent: {
         gate_reason: "FUTURE_STOCK_NOT_AVAILABLE",
         modo_conversacion: CATALOG_CONVERSATION_MODES.STOCK_QUERY,
@@ -433,22 +435,22 @@ export async function searchCatalogWithAi({
         gate_reason: "FUTURE_STOCK_NOT_AVAILABLE",
         modo_conversacion: CATALOG_CONVERSATION_MODES.STOCK_QUERY,
       },
-      sessionId: null,
+      sessionId: forcedSessionId,
       context: {},
       answer,
       service: "LOCAL_CONTROLADO",
       requiresMoreData: true,
-      question: cleanQuestion,
+      question: effectiveQuestion,
       mode: CATALOG_CONVERSATION_MODES.STOCK_QUERY,
     });
   }
 
-  if (asksForBranchStock(cleanQuestion)) {
+  if (asksForBranchStock(effectiveQuestion)) {
     const answer =
       "Puedo ayudarte a buscar la pieza en el catálogo, pero la disponibilidad final por sucursal debe validarla ventas. Escríbeme la pieza, código, marca, modelo, año y motor para ubicar el producto correcto.";
 
     await logAiSearch({
-      question: cleanQuestion,
+      question: effectiveQuestion,
       intent: {
         gate_reason: "BRANCH_STOCK_NOT_AVAILABLE",
         modo_conversacion: CATALOG_CONVERSATION_MODES.STOCK_QUERY,
@@ -465,56 +467,66 @@ export async function searchCatalogWithAi({
         gate_reason: "BRANCH_STOCK_NOT_AVAILABLE",
         modo_conversacion: CATALOG_CONVERSATION_MODES.STOCK_QUERY,
       },
-      sessionId: null,
+      sessionId: forcedSessionId,
       context: {},
       answer,
       service: "LOCAL_CONTROLADO",
       requiresMoreData: true,
-      uestion: cleanQuestion,
+      question: effectiveQuestion,
       mode: CATALOG_CONVERSATION_MODES.STOCK_QUERY,
     });
   }
 
-  const session = await getOrCreateSearchSession(rawSessionId);
-  const rawIntent = await buildIntentWithSemanticNormalizer(cleanQuestion);
+  const session = await getOrCreateSearchSession(forcedSessionId);
+  const sessionContext = sessionWasReset ? {} : session.contexto;
+
+  const rawIntent = await buildIntentWithSemanticNormalizer(effectiveQuestion);
   const audience = detectAudienceLevel({
-    question: cleanQuestion,
+    question: effectiveQuestion,
     intent: rawIntent,
   });
+
   rawIntent.nivel_usuario = audience.nivel_usuario;
   rawIntent.tono_respuesta = audience.tono_respuesta;
   rawIntent.audience_score = audience.score;
+
   const ignoreSessionContext = shouldIgnoreSessionContextForQuestion(rawIntent);
 
   const intent = ignoreSessionContext
     ? {
-      ...rawIntent,
-      contexto_sesion_aplicado: false,
-      contexto_sesion_campos: [],
-      contexto_sesion_previo: session.contexto,
-      contexto_sesion_ignorado_por_exclusion: true,
-    }
-    : mergeSessionContextWithIntent(rawIntent, session.contexto);
+        ...rawIntent,
+        contexto_sesion_aplicado: false,
+        contexto_sesion_campos: [],
+        contexto_sesion_previo: sessionContext,
+        contexto_sesion_ignorado_por_exclusion: true,
+      }
+    : mergeSessionContextWithIntent(rawIntent, sessionContext);
 
   const route = routeCatalogConversation({
-    question: cleanQuestion,
+    question: effectiveQuestion,
     intent,
-    sessionContext: session.contexto,
+    sessionContext,
   });
 
-  if (route.mode !== CATALOG_CONVERSATION_MODES.PRODUCT_SEARCH && !route.shouldSearchCatalog) {
+  if (
+    route.mode !== CATALOG_CONVERSATION_MODES.PRODUCT_SEARCH &&
+    !route.shouldSearchCatalog
+  ) {
     return answerAdvisorMode({
-      cleanQuestion,
+      cleanQuestion: effectiveQuestion,
       intent,
       route,
-      session,
+      session: {
+        ...session,
+        contexto: sessionContext,
+      },
       ignoreSessionContext,
       origen,
     });
   }
 
   const gate = buildIntentGate({
-    question: cleanQuestion,
+    question: effectiveQuestion,
     intent,
   });
 
@@ -527,12 +539,12 @@ export async function searchCatalogWithAi({
   const updatedContext = ignoreSessionContext
     ? {}
     : await updateSearchSessionContext({
-      sessionId: session.session_id,
-      previousContext: session.contexto,
-      intent: sessionIntentForUpdate,
-      question: cleanQuestion,
-      origen,
-    });
+        sessionId: session.session_id,
+        previousContext: sessionContext,
+        intent: sessionIntentForUpdate,
+        question: effectiveQuestion,
+        origen,
+      });
 
   const effectiveIntent = {
     ...intent,
@@ -543,6 +555,12 @@ export async function searchCatalogWithAi({
     session_id: session.session_id,
     contexto_corto: updatedContext,
   };
+
+  if (sessionWasReset) {
+    effectiveIntent.contexto_sesion_reset = true;
+    effectiveIntent.pregunta_original = cleanQuestion;
+    effectiveIntent.pregunta_efectiva = effectiveQuestion;
+  }
 
   if (!gate.allowed) {
     let service = "LOCAL_CONTROLADO";
@@ -578,7 +596,7 @@ export async function searchCatalogWithAi({
     }
 
     await logAiSearch({
-      question: cleanQuestion,
+      question: effectiveQuestion,
       intent: {
         ...effectiveIntent,
         gate_reason: gate.reason,
@@ -595,7 +613,15 @@ export async function searchCatalogWithAi({
       gate_reason: gate.reason,
       modo_conversacion: route.mode,
       conversation_route: route,
+      session_id: session.session_id,
+      contexto_corto: updatedContext,
     };
+
+    if (sessionWasReset) {
+      blockedIntent.contexto_sesion_reset = true;
+      blockedIntent.pregunta_original = cleanQuestion;
+      blockedIntent.pregunta_efectiva = effectiveQuestion;
+    }
 
     return buildEmptyResult({
       intent: blockedIntent,
@@ -604,13 +630,13 @@ export async function searchCatalogWithAi({
       answer,
       service,
       requiresMoreData: true,
-      question: cleanQuestion,
+      question: effectiveQuestion,
       mode: route.mode,
     });
   }
 
   return runProductSearch({
-    cleanQuestion,
+    cleanQuestion: effectiveQuestion,
     effectiveIntent,
     origen,
   });
