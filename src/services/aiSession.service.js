@@ -200,10 +200,7 @@ function hasAdvisorContext(context = {}) {
     );
 }
 
-export function mergeSessionContextWithIntent(
-    intent = {},
-    sessionContext = {},
-) {
+export function mergeSessionContextWithIntent(intent = {}, sessionContext = {}) {
     const hasCurrentMarca = hasValue(intent.marca_auto);
     const hasCurrentModelo = hasValue(intent.modelo_auto);
     const hasCurrentAnio = hasValue(intent.anio);
@@ -219,12 +216,8 @@ export function mergeSessionContextWithIntent(
 
     const merged = {
         ...intent,
-        marca_auto: hasCurrentMarca
-            ? intent.marca_auto
-            : sessionContext.marca_auto || null,
-        modelo_auto: hasCurrentModelo
-            ? intent.modelo_auto
-            : sessionContext.modelo_auto || null,
+        marca_auto: hasCurrentMarca ? intent.marca_auto : sessionContext.marca_auto || null,
+        modelo_auto: hasCurrentModelo ? intent.modelo_auto : sessionContext.modelo_auto || null,
         anio: hasCurrentAnio ? intent.anio : sessionContext.anio || null,
         motor: hasCurrentMotor ? intent.motor : sessionContext.motor || null,
     };
@@ -232,8 +225,7 @@ export function mergeSessionContextWithIntent(
     const applied = [];
 
     if (!hasCurrentMarca && sessionContext.marca_auto) applied.push("marca_auto");
-    if (!hasCurrentModelo && sessionContext.modelo_auto)
-        applied.push("modelo_auto");
+    if (!hasCurrentModelo && sessionContext.modelo_auto) applied.push("modelo_auto");
     if (!hasCurrentAnio && sessionContext.anio) applied.push("anio");
     if (!hasCurrentMotor && sessionContext.motor) applied.push("motor");
 
@@ -252,16 +244,12 @@ export function mergeSessionContextWithIntent(
         Array.isArray(sessionContext.pendiente_terminos_producto) &&
         sessionContext.pendiente_terminos_producto.length
     ) {
-        merged.terminos_producto_detectados =
-            sessionContext.pendiente_terminos_producto;
+        merged.terminos_producto_detectados = sessionContext.pendiente_terminos_producto;
         merged.busqueda_por_sintoma_sesion = true;
         applied.push("terminos_producto_detectados");
     }
 
-    if (
-        Array.isArray(sessionContext.pendiente_sintomas) &&
-        sessionContext.pendiente_sintomas.length
-    ) {
+    if (Array.isArray(sessionContext.pendiente_sintomas) && sessionContext.pendiente_sintomas.length) {
         merged.pendiente_sintomas_sesion = sessionContext.pendiente_sintomas;
     }
 

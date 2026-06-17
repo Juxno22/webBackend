@@ -722,6 +722,22 @@ function looksLikePartNumber(rawToken) {
   return false;
 }
 
+function isMotorLikePartCode(question, code) {
+  const text = normalizeText(question);
+  const cleanCode = normalizePartNumber(code);
+
+  if (!cleanCode) return false;
+
+  return (
+    /^([1-9][0-9]?)L$/.test(cleanCode) &&
+    (
+      /\bMOTOR\b/.test(text) ||
+      /\b[1-9]\s+[0-9]\s*L\b/.test(text) ||
+      /\b[1-9]\.[0-9]\s*L?\b/.test(text)
+    )
+  );
+}
+
 function isLoosePartTokenBlockedByContext(question, code) {
   const text = normalizeText(question);
   const cleanCode = normalizePartNumber(code);
@@ -761,7 +777,8 @@ function extractPartNumbers(question) {
   const looseCodes = rawTokens
     .filter((token) => looksLikePartNumber(token))
     .map((token) => normalizePartNumber(token))
-    .filter((code) => !isLoosePartTokenBlockedByContext(question, code));
+    .filter((code) => !isLoosePartTokenBlockedByContext(question, code))
+    .filter((code) => !isMotorLikePartCode(question, code));
 
   return unique([...contextualCodes, ...looseCodes]).slice(0, 8);
 }
@@ -985,6 +1002,53 @@ function hasVehicleOnlyIntent(question, intent) {
   );
 }
 
+const MODEL_BRAND_HINTS = new Map([
+  ["CHEVY", "CHEVROLET"],
+  ["CORSA", "CHEVROLET"],
+  ["AVEO", "CHEVROLET"],
+  ["SPARK", "CHEVROLET"],
+  ["TRAX", "CHEVROLET"],
+
+  ["TSURU", "NISSAN"],
+  ["MARCH", "NISSAN"],
+  ["VERSA", "NISSAN"],
+  ["SENTRA", "NISSAN"],
+  ["B15", "NISSAN"],
+
+  ["JETTA", "VOLKSWAGEN"],
+  ["POINTER", "VOLKSWAGEN"],
+  ["AMAROK", "VOLKSWAGEN"],
+
+  ["COROLLA", "TOYOTA"],
+  ["CIVIC", "HONDA"],
+  ["FOCUS", "FORD"],
+  ["RANGER", "FORD"],
+]);
+
+function inferBrandFromModel(modelo) {
+  const cleanModel = normalizeText(modelo);
+
+  return MODEL_BRAND_HINTS.get(cleanModel) || null;
+}
+
+function isInvalidNumericVehicleModel(question, modelo) {
+  const text = normalizeText(question);
+  const cleanModel = normalizeText(modelo);
+
+  if (!cleanModel || !/^\d{1,3}$/.test(cleanModel)) return false;
+
+  // Modelo "6" casi siempre viene de motor 1.6, medida, canales, etc.
+  if (/^\d$/.test(cleanModel)) return true;
+
+  const escaped = cleanModel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  return (
+    new RegExp(`\\bMOTOR\\s+\\d\\s+${escaped}\\b`).test(text) ||
+    new RegExp(`\\b${escaped}\\s+(SOHC|DOHC|VTEC|TURBO|L|LTS|LITROS?)\\b`).test(text) ||
+    new RegExp(`\\bMOTOR\\s+${escaped}\\b`).test(text)
+  );
+}
+
 function detectVehicleAlias(question) {
   const text = ` ${normalizeText(question)} `;
 
@@ -1112,8 +1176,15 @@ async function detectVehicleFromDb(question, excludedTokens = []) {
     }
   }
 
-  if (isInvalidModelDetectedFromTechnicalMeasurement(question, modelo)) {
+  if (
+    isInvalidModelDetectedFromTechnicalMeasurement(question, modelo) ||
+    isInvalidNumericVehicleModel(question, modelo)
+  ) {
     modelo = null;
+  }
+
+  if (!marca && modelo) {
+    marca = inferBrandFromModel(modelo) || marca;
   }
 
   return { marca, modelo };

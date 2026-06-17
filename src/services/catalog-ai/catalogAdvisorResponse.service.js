@@ -99,13 +99,13 @@ function buildDiagnosticGuideAnswer({ intent = {}, sessionContext = {} }) {
     if (level === "PRINCIPIANTE") {
       const advisorTurns = getAdvisorTurns(intent, sessionContext);
 
-      if (vehicleText || advisorTurns >= 2) {
+      if (level === "PRINCIPIANTE") {
         return [
-          "Con ese síntoma ya puedo darte una ruta inicial sin alargar más la conversación.",
-          buildCoolingProposalText(),
+          "Cuando un carro se calienta, normalmente hay que revisar el sistema de enfriamiento.",
+          "Las piezas más comunes son termostato, bomba de agua, radiador, tapón, mangueras, ventilador o sensor de temperatura.",
           vehicleText
-            ? `Con ${vehicleText}, puedo mostrar opciones orientativas del catálogo para que ventas valide compatibilidad.`
-            : "Si no sabes más datos, ventas puede validar con foto, muestra física o código de la pieza.",
+            ? `Con ${vehicleText}, puedo buscar opciones orientativas para que ventas valide compatibilidad.`
+            : "Dime solo marca, modelo y año para mostrarte opciones orientativas.",
         ].join(" ");
       }
 
@@ -115,6 +115,7 @@ function buildDiagnosticGuideAnswer({ intent = {}, sessionContext = {} }) {
         "Dime solo marca, modelo y año para mostrarte opciones orientativas.",
       ].join(" ");
     }
+
     return [
       "El calentamiento puede relacionarse con termostato, bomba de agua, radiador, tapón, depósito, mangueras, ventilador o sensor de temperatura.",
       vehicleText
@@ -140,8 +141,18 @@ function buildComparisonGuideAnswer({ intent = {} }) {
   const mentionsRadiatorCap = hasTerm(intent, /TAPON.*RADIADOR|TAPÓN.*RADIADOR/);
   const mentionsDepositCap = hasTerm(intent, /TAPON.*DEPOSITO|TAPÓN.*DEPÓSITO|TAPON.*DEPÓSITO|TAPÓN.*DEPOSITO/);
 
-  if (definitionQuestion && mentionsThermostat) {
-    return "El termostato es una válvula que regula el paso del anticongelante según la temperatura del motor. Cuando está cerrado ayuda a que el motor alcance temperatura; cuando abre, permite circular el anticongelante hacia el radiador. Si falla, puede causar calentamiento o que el motor tarde en llegar a temperatura. Para cotizar uno necesito marca, modelo y año del vehículo.";
+  const normalizedQuestion = String(intent.pregunta_normalizada || "").toUpperCase();
+
+  if (
+    mentionsThermostat &&
+    (
+      /\bQUE\s+ES\b/.test(normalizedQuestion) ||
+      /\bQUÉ\s+ES\b/.test(normalizedQuestion) ||
+      /\bPARA\s+QUE\s+SIRVE\b/.test(normalizedQuestion) ||
+      /\bPARA\s+QUÉ\s+SIRVE\b/.test(normalizedQuestion)
+    )
+  ) {
+    return "El termostato es una válvula del sistema de enfriamiento. Ayuda a controlar cuándo circula el anticongelante hacia el radiador para mantener el motor en su temperatura correcta. Si falla, puede provocar calentamiento o que el motor trabaje fuera de temperatura.";
   }
 
   if (mentionsPump && mentionsThermostat) {
@@ -156,6 +167,15 @@ function buildComparisonGuideAnswer({ intent = {} }) {
 }
 
 function buildCompatibilityGuideAnswer({ intent = {}, sessionContext = {} }) {
+  const text = String(intent.pregunta_normalizada || "").toUpperCase();
+
+  if (/\b(PUEDO|PUEDE)\s+PONER\b/.test(text) || /\bLE\s+PUEDO\s+PONER\b/.test(text)) {
+    return [
+      "No conviene confirmar esa compatibilidad solo por decir Chevy y Corsa.",
+      "Aunque algunas piezas pueden cruzar entre aplicaciones, la bomba de agua debe validarse por año, motor, código o aplicación registrada.",
+      "Pásame el año/motor de tu Chevy y, si tienes, el código de la bomba del Corsa para validarlo contra catálogo. Ventas confirma compatibilidad final.",
+    ].join(" ");
+  }
   const vehicleText = buildVehicleText(intent, sessionContext);
 
   return [

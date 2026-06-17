@@ -111,6 +111,16 @@ async function buildIntentWithSemanticNormalizer(cleanQuestion) {
   return rawIntent;
 }
 
+function shouldForceLocalAdvisorResponse({ route, intent = {} } = {}) {
+  return (
+    route?.reason === "PRODUCT_CONCEPT_EXPLANATION" ||
+    (
+      route?.mode === CATALOG_CONVERSATION_MODES.DIAGNOSTIC_GUIDE &&
+      intent.nivel_usuario === "PRINCIPIANTE"
+    )
+  );
+}
+
 async function answerAdvisorMode({
   cleanQuestion,
   intent,
@@ -150,25 +160,32 @@ async function answerAdvisorMode({
     sessionContext: updatedContext,
   });
 
-  try {
-    const aiResult = await generateAiAdvisorAnswer({
-      messages: buildAdvisorAiMessages({
-        question: cleanQuestion,
-        mode: route.mode,
-        route,
-        intent: effectiveIntent,
-        sessionContext: updatedContext,
-      }),
-    });
+  const forceLocalAdvisor = shouldForceLocalAdvisorResponse({
+    route,
+    intent: effectiveIntent,
+  });
 
-    service = aiResult.service || service;
+  if (!forceLocalAdvisor) {
+    try {
+      const aiResult = await generateAiAdvisorAnswer({
+        messages: buildAdvisorAiMessages({
+          question: cleanQuestion,
+          mode: route.mode,
+          route,
+          intent: effectiveIntent,
+          sessionContext: updatedContext,
+        }),
+      });
 
-    if (aiResult.response) {
-      answer = aiResult.response;
+      service = aiResult.service || service;
+
+      if (aiResult.response) {
+        answer = aiResult.response;
+      }
+    } catch (error) {
+      service = "LOCAL_ASESOR_CONTROLADO";
+      console.error("IA asesora falló, se usó respuesta local:", error.message);
     }
-  } catch (error) {
-    service = "LOCAL_ASESOR_CONTROLADO";
-    console.error("IA asesora falló, se usó respuesta local:", error.message);
   }
 
   await logAiSearch({

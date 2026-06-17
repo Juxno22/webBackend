@@ -494,8 +494,17 @@ export function buildCatalogFollowup({
     const normalizedQuestion = normalizeText(question);
     const hasProducts = Array.isArray(products) && products.length > 0;
 
-    // Si ya hay productos recomendados, no generamos respuestas rápidas.
-    // Las acciones reales se muestran en cada tarjeta: ver detalle y agregar.
+    if (gateReason === "PRODUCT_CONCEPT_EXPLANATION") {
+        return makeFollowup({
+            requiereSeguimiento: false,
+            bloqueante: false,
+            siguienteAccion: "NONE",
+            datosFaltantes: [],
+            preguntas: [],
+            respuestasRapidas: [],
+        });
+    }
+
     if (hasProducts) {
         return makeFollowup({
             requiereSeguimiento: false,
