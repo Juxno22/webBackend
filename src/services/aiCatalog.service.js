@@ -124,6 +124,85 @@ function shouldForceLocalAdvisorResponse({ route, intent = {} } = {}) {
   );
 }
 
+function normalizeCatalogText(value) {
+  return cleanString(value)
+    .toUpperCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function intentRequestsRadiatorCap(intent = {}) {
+  const text = normalizeCatalogText(
+    [
+      intent.pregunta_normalizada,
+      ...(intent.terminos_producto_detectados || []),
+      ...(intent.product_query_tokens || []),
+      ...(intent.strict_product_family_tokens || []),
+    ].join(" ")
+  );
+
+  return (
+    /\bTAPON\b/.test(text) &&
+    (
+      /\bRADIADOR\b/.test(text) ||
+      /\bTAPON\s+RADIADOR\b/.test(text)
+    )
+  );
+}
+
+function productLooksLikeDepositWithCap(product = {}) {
+  const text = normalizeCatalogText(
+    [
+      product.descripcion,
+      product.descripcion_web,
+      product.familia,
+      product.categoria,
+    ].join(" ")
+  );
+
+  return /\bDEPOSITO\b/.test(text) && /\bTAPON\b/.test(text);
+}
+
+function shouldKeepLocalProductAnswer({ intent = {}, products = [] } = {}) {
+  const top = products[0];
+
+  if (!top) return false;
+
+  if (intentRequestsRadiatorCap(intent) && productLooksLikeDepositWithCap(top)) {
+    return true;
+  }
+
+  return false;
+}
+
+function sanitizeCatalogAnswer(answer, { intent = {}, products = [] } = {}) {
+  let text = cleanString(answer);
+
+  if (!text) return text;
+
+  text = text
+    .replace(/\bs[ií]\s+es\s+compatible\b/gi, "puede ser una coincidencia orientativa")
+    .replace(/\bes\s+compatible\b/gi, "puede aplicar")
+    .replace(/\bson\s+compatibles\b/gi, "pueden aplicar")
+    .replace(/\ble\s+queda\b/gi, "podría aplicar")
+    .replace(/\bqueda\s+perfecto\b/gi, "debe validarse")
+    .replace(/\bsirve\s+seguro\b/gi, "debe validarse");
+
+  if (
+    intentRequestsRadiatorCap(intent) &&
+    products.some((product) => productLooksLikeDepositWithCap(product)) &&
+    !/deposito|depósito/i.test(text)
+  ) {
+    text += " Nota: la opción encontrada parece ser depósito de anticongelante con tapón, no necesariamente tapón de radiador suelto.";
+  }
+
+  if (!/ventas valida|ventas debe validar|compatibilidad final/i.test(text)) {
+    text += " Ventas valida compatibilidad y disponibilidad final.";
+  }
+
+  return text;
+}
+
 async function answerAdvisorMode({
   cleanQuestion,
   intent,
@@ -144,12 +223,12 @@ async function answerAdvisorMode({
   const updatedContext = ignoreSessionContext
     ? {}
     : await updateSearchSessionContext({
-        sessionId: session.session_id,
-        previousContext: session.contexto,
-        intent: advisoryIntent,
-        question: cleanQuestion,
-        origen,
-      });
+      sessionId: session.session_id,
+      previousContext: session.contexto,
+      intent: advisoryIntent,
+      question: cleanQuestion,
+      origen,
+    });
 
   const effectiveIntent = {
     ...advisoryIntent,
@@ -257,23 +336,23 @@ async function runProductSearch({ cleanQuestion, effectiveIntent, origen }) {
 
     advisorEvidence = isCrossApplicationComparison
       ? buildCrossApplicationComparisonEvidence({
-          products: recommended,
-          intent: effectiveIntent,
-        })
+        products: recommended,
+        intent: effectiveIntent,
+      })
       : buildProductComparisonEvidence({
-          products: recommended,
-          intent: effectiveIntent,
-        });
+        products: recommended,
+        intent: effectiveIntent,
+      });
 
     answer = isCrossApplicationComparison
       ? buildCrossApplicationComparisonLocalAnswer({
-          products: recommended,
-          intent: effectiveIntent,
-        })
+        products: recommended,
+        intent: effectiveIntent,
+      })
       : buildProductComparisonLocalAnswer({
-          products: recommended,
-          intent: effectiveIntent,
-        });
+        products: recommended,
+        intent: effectiveIntent,
+      });
 
     useAdvisorWriter = recommended.length > 0 || isCrossApplicationComparison;
   }
@@ -293,32 +372,40 @@ async function runProductSearch({ cleanQuestion, effectiveIntent, origen }) {
     useAdvisorWriter = recommended.length > 0;
   }
 
-  if (recommended.length > 0 || useAdvisorWriter) {
+  const forceLocalProductAnswer = shouldKeepLocalProductAnswer({
+    intent: effectiveIntent,
+    products: recommended,
+  });
+
+  if ((recommended.length > 0 || useAdvisorWriter) && !forceLocalProductAnswer) {
     try {
       const aiResult = useAdvisorWriter
         ? await generateAiAdvisorAnswer({
-            messages: buildAdvisorAiMessages({
-              question: cleanQuestion,
-              mode: conversationMode,
-              route: effectiveIntent.conversation_route,
-              intent: effectiveIntent,
-              sessionContext: effectiveIntent.contexto_corto || {},
-              products: recommended,
-              evidence: advisorEvidence,
-            }),
-          })
+          messages: buildAdvisorAiMessages({
+            question: cleanQuestion,
+            mode: conversationMode,
+            route: effectiveIntent.conversation_route,
+            intent: effectiveIntent,
+            sessionContext: effectiveIntent.contexto_corto || {},
+            products: recommended,
+            evidence: advisorEvidence,
+          }),
+        })
         : await generateAiAnswer({
-            messages: buildAiMessages({
-              question: cleanQuestion,
-              intent: effectiveIntent,
-              products: recommended,
-            }),
-          });
+          messages: buildAiMessages({
+            question: cleanQuestion,
+            intent: effectiveIntent,
+            products: recommended,
+          }),
+        });
 
       service = aiResult.service || service;
 
       if (aiResult.response) {
-        answer = aiResult.response;
+        answer = sanitizeCatalogAnswer(aiResult.response, {
+          intent: effectiveIntent,
+          products: recommended,
+        });
       }
     } catch (error) {
       console.error("IA externa falló, se usó respuesta local:", error.message);
@@ -494,12 +581,12 @@ export async function searchCatalogWithAi({
 
   const intent = ignoreSessionContext
     ? {
-        ...rawIntent,
-        contexto_sesion_aplicado: false,
-        contexto_sesion_campos: [],
-        contexto_sesion_previo: sessionContext,
-        contexto_sesion_ignorado_por_exclusion: true,
-      }
+      ...rawIntent,
+      contexto_sesion_aplicado: false,
+      contexto_sesion_campos: [],
+      contexto_sesion_previo: sessionContext,
+      contexto_sesion_ignorado_por_exclusion: true,
+    }
     : mergeSessionContextWithIntent(rawIntent, sessionContext);
 
   const route = routeCatalogConversation({
@@ -539,12 +626,12 @@ export async function searchCatalogWithAi({
   const updatedContext = ignoreSessionContext
     ? {}
     : await updateSearchSessionContext({
-        sessionId: session.session_id,
-        previousContext: sessionContext,
-        intent: sessionIntentForUpdate,
-        question: effectiveQuestion,
-        origen,
-      });
+      sessionId: session.session_id,
+      previousContext: sessionContext,
+      intent: sessionIntentForUpdate,
+      question: effectiveQuestion,
+      origen,
+    });
 
   const effectiveIntent = {
     ...intent,

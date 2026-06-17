@@ -170,6 +170,33 @@ function getAdvisorTurns(intent = {}) {
     );
 }
 
+function hasIntentTerm(intent = {}, pattern) {
+    const values = [
+        intent.pregunta_normalizada,
+        ...(Array.isArray(intent.terminos_producto_detectados)
+            ? intent.terminos_producto_detectados
+            : []),
+        ...(Array.isArray(intent.product_query_tokens)
+            ? intent.product_query_tokens
+            : []),
+    ];
+
+    return values.some((value) => pattern.test(String(value || "").toUpperCase()));
+}
+
+function isUpperHoseSearchWithoutProducts({ intent = {}, products = [] } = {}) {
+    return (
+        (!Array.isArray(products) || products.length === 0) &&
+        hasIntentTerm(intent, /\bMANGUERA\b/) &&
+        Array.isArray(intent.posiciones_detectadas) &&
+        intent.posiciones_detectadas.includes("SUPERIOR")
+    );
+}
+
+function buildVehicleBaseText(intent = {}) {
+    return [intent.marca_auto, intent.modelo_auto].filter(Boolean).join(" ");
+}
+
 function makeFollowup({
     requiereSeguimiento = false,
     bloqueante = false,
@@ -327,6 +354,25 @@ function buildVehicleWithoutPartFollowup({ intent = {} } = {}) {
 }
 
 function buildProductSearchFollowup({ intent = {}, products = [] } = {}) {
+
+    if (isUpperHoseSearchWithoutProducts({ intent, products })) {
+        const vehicleText = buildVehicleBaseText(intent);
+
+        return makeFollowup({
+            requiereSeguimiento: true,
+            bloqueante: true,
+            siguienteAccion: "ASK_YEAR_ONLY",
+            datosFaltantes: ["anio"],
+            preguntas: [
+                vehicleText
+                    ? `¿Qué año es tu ${vehicleText}?`
+                    : "¿Qué año es tu vehículo?",
+            ],
+            respuestasRapidas: [],
+            maxPreguntas: 1,
+        });
+    }
+    
     if (products.length > 0) {
         return makeFollowup({
             requiereSeguimiento: false,

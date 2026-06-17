@@ -1,6 +1,119 @@
 import { describeMeasurementFilters } from "./catalogMeasurements.service.js";
 
-export function buildNoResultsAnswer(intent) {
+function normalizeCatalogText(value) {
+  return cleanString(value)
+    .toUpperCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function hasIntentTerm(intent = {}, pattern) {
+  const values = [
+    intent.pregunta_normalizada,
+    ...(Array.isArray(intent.terminos_producto_detectados)
+      ? intent.terminos_producto_detectados
+      : []),
+    ...(Array.isArray(intent.product_query_tokens)
+      ? intent.product_query_tokens
+      : []),
+    ...(Array.isArray(intent.strict_product_family_tokens)
+      ? intent.strict_product_family_tokens
+      : []),
+  ];
+
+  return values.some((value) => pattern.test(normalizeCatalogText(value)));
+}
+
+function buildVehicleText(intent = {}) {
+  return [
+    intent.marca_auto,
+    intent.modelo_auto,
+    intent.anio,
+    intent.motor,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function requestedRadiatorCap(intent = {}) {
+  const text = normalizeCatalogText(
+    [
+      intent.pregunta_normalizada,
+      ...(intent.terminos_producto_detectados || []),
+      ...(intent.product_query_tokens || []),
+      ...(intent.strict_product_family_tokens || []),
+    ].join(" ")
+  );
+
+  return (
+    /\bTAPON\b/.test(text) &&
+    (
+      /\bRADIADOR\b/.test(text) ||
+      /\bTAPON\s+RADIADOR\b/.test(text)
+    )
+  );
+}
+
+function productIsDepositWithCap(product = {}) {
+  const text = normalizeCatalogText(
+    [
+      product.descripcion,
+      product.descripcion_web,
+      product.familia,
+      product.categoria,
+    ].join(" ")
+  );
+
+  return /\bDEPOSITO\b/.test(text) && /\bTAPON\b/.test(text);
+}
+
+function requestedUpperHose(intent = {}) {
+  return (
+    hasIntentTerm(intent, /\bMANGUERA\b/) &&
+    Array.isArray(intent.posiciones_detectadas) &&
+    intent.posiciones_detectadas.includes("SUPERIOR")
+  );
+}
+
+function requestedRadiator(intent = {}) {
+  return hasIntentTerm(intent, /\bRADIADOR\b/);
+}
+
+function buildApproxYearText(intent = {}) {
+  if (
+    !intent.anio_aproximado ||
+    !Array.isArray(intent.anios_posibles) ||
+    !intent.anios_posibles.length
+  ) {
+    return "";
+  }
+
+  return `Tomé como referencia ${intent.anios_posibles.join(" o ")} porque el año viene aproximado.`;
+}
+
+function buildNoResultsAnswer(intent) {
+  const vehicleText = buildVehicleText(intent);
+
+  if (requestedRadiator(intent)) {
+    return [
+      vehicleText
+        ? `No encontré radiadores cargados o coincidencias visibles en catálogo para ${vehicleText}.`
+        : "No encontré radiadores cargados o coincidencias visibles en catálogo con los datos escritos.",
+      "Los datos del vehículo sí se detectaron; por ahora esa familia puede no estar cargada en la base o no tiene aplicación visible.",
+      "Ventas puede validarlo manualmente con código, medida, muestra física o foto de la pieza.",
+    ].join(" ");
+  }
+
+  if (requestedUpperHose(intent)) {
+    return [
+      vehicleText
+        ? `No encontré una coincidencia confiable para manguera superior de ${vehicleText}.`
+        : "No encontré una coincidencia confiable para manguera superior con los datos escritos.",
+      "Para validar mejor, dime solo el año del vehículo.",
+      "Si no tienes el año, ventas puede revisarlo con foto o muestra física.",
+    ].join(" ");
+  }
+
   const suggestions = [];
 
   if (intent.numero_parte_tokens.length) {
@@ -8,12 +121,12 @@ export function buildNoResultsAnswer(intent) {
   }
 
   if (intent.marca_auto || intent.modelo_auto || intent.anio || intent.motor) {
-    suggestions.push("Revisa que marca, modelo, año y motor estén correctos.");
+    suggestions.push("Los datos del vehículo se detectaron, pero no hubo coincidencia visible en catálogo.");
   }
 
   if (Array.isArray(intent.medidas_detectadas) && intent.medidas_detectadas.length) {
     suggestions.push(
-      `Detecté la medida "${describeMeasurementFilters(intent.medidas_detectadas)}", pero no encontré una coincidencia confiable.`
+      `Detecté medidas técnicas, pero no encontré una coincidencia confiable.`
     );
   }
 
@@ -40,6 +153,23 @@ export function buildLocalAnswer({ intent, products }) {
   }
 
   const top = products[0];
+
+  if (requestedRadiatorCap(intent) && productIsDepositWithCap(top)) {
+    const vehicleText = buildVehicleText(intent);
+    const approxYearText = buildApproxYearText(intent);
+
+    return [
+      vehicleText
+        ? `Con la información detectada para ${vehicleText}, encontré una opción relacionada.`
+        : "Encontré una opción relacionada en catálogo.",
+      `${top.codigo_andyfers || top.codigo_importacion}: ${top.descripcion}.`,
+      "Ojo: este resultado corresponde a depósito de anticongelante con tapón; no lo tomaría automáticamente como tapón de radiador suelto.",
+      approxYearText,
+      "Si buscas solo el tapón, ventas debe validarlo por presión, medida, código o muestra física antes de confirmar.",
+    ]
+      .filter(Boolean)
+      .join(" ");
+  }
 
   const measurementText =
     Array.isArray(intent.medidas_detectadas) && intent.medidas_detectadas.length
@@ -178,6 +308,19 @@ export function buildAiMessages({ question, intent, products }) {
         2
       ),
     },
+    {
+      role: "system",
+      content: [
+        "Eres el asistente de refacciones de Andyfers.",
+        "Responde únicamente usando los productos enviados en CONTEXTO.",
+        "No inventes códigos, compatibilidades, precios ni stock.",
+        "Nunca confirmes compatibilidad de forma definitiva.",
+        "Evita frases como: es compatible, sí es compatible, le queda, queda perfecto, sirve seguro.",
+        "Usa frases seguras como: puede aplicar, opción relacionada, coincidencia orientativa, se debe validar por año/motor/código/medida.",
+        "Si el producto encontrado no es exactamente la pieza solicitada, acláralo.",
+        "Siempre aclara que ventas valida compatibilidad y disponibilidad final.",
+      ].join(" "),
+    }
   ];
 }
 

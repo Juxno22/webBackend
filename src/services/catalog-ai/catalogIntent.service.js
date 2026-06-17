@@ -766,6 +766,27 @@ function isMotorLikePartCode(question, code) {
   );
 }
 
+function isVehicleModelLikePartCode(question, code) {
+  const text = normalizeText(question);
+  const cleanCode = normalizePartNumber(code);
+
+  if (!cleanCode) return false;
+
+  if (
+    cleanCode === "B15" &&
+    (
+      /\bSENTRA\s+B15\b/.test(text) ||
+      /\bB15\s+SENTRA\b/.test(text) ||
+      /\bNISSAN\s+SENTRA\s+B15\b/.test(text) ||
+      /\bRADIADOR\s+SENTRA\s+B15\b/.test(text)
+    )
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 function isLoosePartTokenBlockedByContext(question, code) {
   const text = normalizeText(question);
   const cleanCode = normalizePartNumber(code);
@@ -806,7 +827,8 @@ function extractPartNumbers(question) {
     .filter((token) => looksLikePartNumber(token))
     .map((token) => normalizePartNumber(token))
     .filter((code) => !isLoosePartTokenBlockedByContext(question, code))
-    .filter((code) => !isMotorLikePartCode(question, code));
+    .filter((code) => !isMotorLikePartCode(question, code))
+    .filter((code) => !isVehicleModelLikePartCode(question, code));
 
   return unique([...contextualCodes, ...looseCodes]).slice(0, 8);
 }
