@@ -1,4 +1,5 @@
 import { describeMeasurementFilters } from "./catalogMeasurements.service.js";
+import { cleanString } from "./catalogUtils.service.js";
 
 function normalizeCatalogText(value) {
   return cleanString(value)
@@ -297,18 +298,6 @@ export function buildAiMessages({ question, intent, products }) {
 
   return [
     {
-      role: "user",
-      content: JSON.stringify(
-        {
-          pregunta_cliente: question,
-          intencion_detectada: intent,
-          contexto_productos: contextProducts,
-        },
-        null,
-        2
-      ),
-    },
-    {
       role: "system",
       content: [
         "Eres el asistente de refacciones de Andyfers.",
@@ -320,7 +309,19 @@ export function buildAiMessages({ question, intent, products }) {
         "Si el producto encontrado no es exactamente la pieza solicitada, acláralo.",
         "Siempre aclara que ventas valida compatibilidad y disponibilidad final.",
       ].join(" "),
-    }
+    },
+    {
+      role: "user",
+      content: JSON.stringify(
+        {
+          pregunta_cliente: question,
+          intencion_detectada: intent,
+          contexto_productos: contextProducts,
+        },
+        null,
+        2
+      ),
+    },
   ];
 }
 
