@@ -42,6 +42,52 @@ function buildValidPublicCodeCondition(alias = "p") {
   `;
 }
 
+function buildProductoMultimediaSelectSql(alias = "p") {
+    return `
+    (
+      SELECT pm.thumbnail_url
+      FROM producto_multimedia pm
+      WHERE pm.producto_id = ${alias}.id
+        AND pm.tipo = 'IMAGEN'
+        AND pm.activo = 1
+      ORDER BY
+        CASE pm.rol
+          WHEN 'PRINCIPAL' THEN 0
+          WHEN 'GALERIA' THEN 1
+          ELSE 2
+        END,
+        pm.orden ASC,
+        pm.id ASC
+      LIMIT 1
+    ) AS imagen_thumbnail_url,
+
+    (
+      SELECT pm.secure_url
+      FROM producto_multimedia pm
+      WHERE pm.producto_id = ${alias}.id
+        AND pm.tipo = 'IMAGEN'
+        AND pm.activo = 1
+      ORDER BY
+        CASE pm.rol
+          WHEN 'PRINCIPAL' THEN 0
+          WHEN 'GALERIA' THEN 1
+          ELSE 2
+        END,
+        pm.orden ASC,
+        pm.id ASC
+      LIMIT 1
+    ) AS imagen_url,
+
+    (
+      SELECT COUNT(*)
+      FROM producto_multimedia pm
+      WHERE pm.producto_id = ${alias}.id
+        AND pm.tipo = 'IMAGEN'
+        AND pm.activo = 1
+    ) AS total_imagenes
+  `;
+}
+
 function cleanQueryValue(value) {
     if (value === undefined || value === null) return "";
 
@@ -358,7 +404,8 @@ router.get("/productos/destacados", async (req, res, next) => {
         p.prioridad_ia,
         COALESCE(SUM(CASE WHEN i.disponible_web = 1 THEN i.stock ELSE 0 END), 0) AS stock_total_web,
         MIN(i.precio) AS precio_minimo,
-        COUNT(DISTINCT pc.id) AS total_cruces
+        COUNT(DISTINCT pc.id) AS total_cruces,
+        ${buildProductoMultimediaSelectSql("p")}
       FROM productos p
       JOIN categorias c ON c.id = p.categoria_id
       LEFT JOIN inventario i ON i.producto_id = p.id
@@ -627,7 +674,8 @@ router.get("/productos", async (req, res, next) => {
         p.prioridad_ia,
         COALESCE(SUM(CASE WHEN i.disponible_web = 1 THEN i.stock ELSE 0 END), 0) AS stock_total_web,
         MIN(i.precio) AS precio_minimo,
-        COUNT(DISTINCT pc.id) AS total_cruces
+        COUNT(DISTINCT pc.id) AS total_cruces,
+        ${buildProductoMultimediaSelectSql("p")}
       FROM productos p
       JOIN categorias c ON c.id = p.categoria_id
       LEFT JOIN inventario i ON i.producto_id = p.id
@@ -789,7 +837,8 @@ router.get("/productos/:codigo", async (req, res, next) => {
         p.activo_web,
         p.activo,
         COALESCE(SUM(CASE WHEN i.disponible_web = 1 THEN i.stock ELSE 0 END), 0) AS stock_total_web,
-        MIN(i.precio) AS precio_minimo
+        MIN(i.precio) AS precio_minimo,
+        ${buildProductoMultimediaSelectSql("p")}
       FROM productos p
       JOIN categorias c ON c.id = p.categoria_id
       LEFT JOIN inventario i ON i.producto_id = p.id
@@ -913,6 +962,46 @@ router.get("/productos/:codigo", async (req, res, next) => {
             [producto.id]
         );
 
+        const [multimedia] = await pool.query(
+            `
+            SELECT
+                id,
+                tipo,
+                rol,
+                cloudinary_public_id,
+                secure_url,
+                thumbnail_url,
+                codigo_archivo_original,
+                nombre_archivo_original,
+                orden,
+                activo
+            FROM producto_multimedia
+            WHERE producto_id = ?
+                AND activo = 1
+            ORDER BY
+                CASE rol
+                WHEN 'PRINCIPAL' THEN 0
+                WHEN 'GALERIA' THEN 1
+                WHEN 'VIDEO' THEN 2
+                ELSE 3
+                END,
+                orden ASC,
+                id ASC
+            `,
+            [producto.id]
+        );
+
+        const imagenes = multimedia.filter((item) => item.tipo === "IMAGEN");
+        const videos = multimedia.filter((item) => item.tipo === "VIDEO");
+
+        const imagenPrincipal =
+            imagenes.find((item) => item.rol === "PRINCIPAL") ||
+            imagenes[0] ||
+            null;
+
+        const galeria = imagenes.filter((item) => item.id !== imagenPrincipal?.id);
+        const videoPrincipal = videos[0] || null;
+
         res.json({
             ok: true,
             data: {
@@ -922,6 +1011,10 @@ router.get("/productos/:codigo", async (req, res, next) => {
                 relaciones,
                 inventario,
                 atributos,
+                multimedia,
+                imagen_principal: imagenPrincipal,
+                galeria,
+                video_principal: videoPrincipal,
             },
         });
     } catch (error) {

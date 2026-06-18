@@ -262,6 +262,34 @@ function buildPublicVisibilitySql(alias = "p") {
   `;
 }
 
+function buildAdminProductoMultimediaSelectSql(alias = "p") {
+  return `
+    (
+      SELECT pm.thumbnail_url
+      FROM producto_multimedia pm
+      WHERE pm.producto_id = ${alias}.id
+        AND pm.tipo = 'IMAGEN'
+        AND pm.activo = 1
+      ORDER BY
+        CASE pm.rol
+          WHEN 'PRINCIPAL' THEN 0
+          WHEN 'GALERIA' THEN 1
+          ELSE 2
+        END,
+        pm.orden ASC,
+        pm.id ASC
+      LIMIT 1
+    ) AS imagen_thumbnail_url,
+
+    (
+      SELECT COUNT(*)
+      FROM producto_multimedia pm
+      WHERE pm.producto_id = ${alias}.id
+        AND pm.activo = 1
+    ) AS total_multimedia
+  `;
+}
+
 function buildProductosWhere(query) {
   const conditions = [];
   const params = [];
@@ -511,8 +539,7 @@ router.get("/admin/cotizaciones/:folio", requireAdminAuth, async (req, res, next
   }
 });
 
-router.patch(
-  "/admin/cotizaciones/:folio/estado",
+router.patch("/admin/cotizaciones/:folio/estado",
   requireAdminAuth,
   requireRole(["ADMIN", "VENTAS"]),
   async (req, res, next) => {
@@ -608,8 +635,7 @@ router.patch(
   }
 );
 
-router.post(
-  "/admin/cotizaciones/:folio/eventos",
+router.post("/admin/cotizaciones/:folio/eventos",
   requireAdminAuth,
   requireRole(["ADMIN", "VENTAS"]),
   async (req, res, next) => {
@@ -760,7 +786,8 @@ router.get("/admin/productos", requireAdminAuth, async (req, res, next) => {
           THEN 'SIN_CODIGO_VALIDO'
           ELSE 'NO_VISIBLE'
         END AS motivo_visibilidad,
-        c.nombre AS categoria_nombre
+        c.nombre AS categoria_nombre,
+        ${buildAdminProductoMultimediaSelectSql("p")}
       FROM productos p
       LEFT JOIN categorias c ON c.id = p.categoria_id
       ${whereSql}
@@ -860,12 +887,44 @@ router.get("/admin/productos/:id", requireAdminAuth, async (req, res, next) => {
       [id]
     );
 
+    const [multimedia] = await pool.query(
+      `
+      SELECT
+        id,
+        tipo,
+        rol,
+        cloudinary_public_id,
+        secure_url,
+        thumbnail_url,
+        codigo_archivo_original,
+        nombre_archivo_original,
+        orden,
+        activo,
+        created_at,
+        updated_at
+      FROM producto_multimedia
+      WHERE producto_id = ?
+      ORDER BY
+        activo DESC,
+        CASE rol
+          WHEN 'PRINCIPAL' THEN 0
+          WHEN 'GALERIA' THEN 1
+          WHEN 'VIDEO' THEN 2
+          ELSE 3
+        END,
+        orden ASC,
+        id ASC
+      `,
+      [id]
+    );
+
     res.json({
       ok: true,
       data: {
         ...producto,
         atributos,
         cruces,
+        multimedia,
       },
     });
   } catch (error) {
@@ -873,8 +932,7 @@ router.get("/admin/productos/:id", requireAdminAuth, async (req, res, next) => {
   }
 });
 
-router.patch(
-  "/admin/productos/:id",
+router.patch("/admin/productos/:id",
   requireAdminAuth,
   requireRole(["ADMIN", "VENTAS"]),
   async (req, res, next) => {
