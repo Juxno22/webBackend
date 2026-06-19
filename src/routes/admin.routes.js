@@ -1,11 +1,33 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import multer from 'multer';
+import { v2 as cloudinary } from 'cloudinary';
 import { pool } from "../config/db.js";
 import { requireAdminAuth, requireRole } from "../middleware/authAdmin.js";
 import { normalizePartNumber, normalizeText } from "../utils/normalize.js";
 
 const router = Router();
+
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+  secure: true,
+});
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 8 * 1024 * 1024,
+  },
+  fileFilter(req, file, cb) {
+    if (!file.mimetype || !file.mimetype.startsWith("image/")) {
+      return cb(new Error("Solo se permiten imagenes."));
+    }
+    return cb(null, true);
+  },
+});
 
 const ESTADOS_VALIDOS = [
   "NUEVA",
@@ -18,6 +40,7 @@ const ESTADOS_VALIDOS = [
   "REQUIERE_DATOS",
 ];
 
+//AUTENTICACION
 function cleanString(value) {
   if (value === undefined || value === null) return null;
 
@@ -122,6 +145,7 @@ router.get("/admin/me", requireAdminAuth, async (req, res) => {
   });
 });
 
+//COTIZACIONES
 function buildCotizacionesWhere(query) {
   const conditions = [];
   const params = [];
@@ -230,6 +254,7 @@ function buildProductoRevisionSql() {
     END
   `;
 }
+
 function buildValidProductoCodeSql(alias = "p") {
   return `
     (
@@ -701,58 +726,553 @@ router.post("/admin/cotizaciones/:folio/eventos",
   }
 );
 
-router.get("/admin/productos/resumen", requireAdminAuth, async (req, res, next) => {
-  try {
-    const [rows] = await pool.query(
-      `
-      SELECT
-        ${buildProductoRevisionSql()} AS estado_revision,
-        COUNT(*) AS total
-      FROM productos p
-      GROUP BY estado_revision
-      ORDER BY total DESC
-      `
+//PRODUCTOS
+function parseTinyBoolean(value, defaultValue = 0) {
+  if (value === undefined || value === null || value === "") return defaultValue;
+
+  if (value === true || value === 1 || value === "1" || value === "true") {
+    return 1;
+  }
+
+  return 0;
+}
+
+function parseMediaOrder(value, fallback = 1) {
+  const parsed = Number.parseInt(value, 10);
+
+  if (Number.isNaN(parsed) || parsed < 1) return fallback;
+
+  return Math.min(parsed, 9999);
+}
+
+function cleanMediaRole(value) {
+  const rol = cleanString(value) || "GALERIA";
+  const upper = rol.toUpperCase();
+
+  if (["PRINCIPAL", "GALERIA", "VIDEO"].includes(upper)) {
+    return upper;
+  }
+
+  return "GALERIA";
+}
+
+function cleanMediaType(value) {
+  const tipo = cleanString(value) || "IMAGEN";
+  const upper = tipo.toUpperCase();
+
+  if (["IMAGEN", "VIDEO"].includes(upper)) {
+    return upper;
+  }
+
+  return "IMAGEN";
+}
+
+function buildThumbnailUrl(secureUrl) {
+  if (!secureUrl || !String(secureUrl).includes("/upload/")) {
+    return secureUrl || null;
+  }
+
+  return String(secureUrl).replace(
+    "/upload/",
+    "/upload/f_auto,q_auto,c_fill,w_420,h_320/",
+    1
+  );
+}
+
+function sanitizeCloudinarySegment(value) {
+  const clean = normalizePartNumber(value || "");
+
+  return clean || "SIN-CODIGO";
+}
+
+function buildProductMediaPublicId(producto, fileName, rol) {
+  const codigo = sanitizeCloudinarySegment(
+    producto.codigo_andyfers || producto.codigo_importacion || producto.id
+  );
+
+  const rawFile = String(fileName || "imagen")
+    .replace(/\.[^.]+$/, "")
+    .replace(/[^a-zA-Z0-9_-]/g, "_")
+    .slice(0, 70);
+
+  if (rol === "PRINCIPAL") {
+    return `andyfers/productos/${codigo}/principal`;
+  }
+
+  return `andyfers/productos/${codigo}/galeria/${Date.now()}_${rawFile}`;
+}
+
+function uploadBufferToCloudinary(buffer, options = {}) {
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      options,
+      (error, result) => {
+        if (error) return reject(error);
+        return resolve(result);
+      }
     );
 
-    const resumen = {
-      total: 0,
-      ok: 0,
-      sin_codigo_valido: 0,
-      sin_descripcion: 0,
-      sin_familia: 0,
-      sin_armadora: 0,
-    };
+    stream.end(buffer);
+  });
+}
 
-    rows.forEach((row) => {
-      const total = Number(row.total || 0);
-      resumen.total += total;
+async function getProductoForAdminMedia(connection, productoId) {
+  const [rows] = await connection.query(
+    `
+    SELECT
+      id,
+      codigo_andyfers,
+      codigo_importacion,
+      descripcion
+    FROM productos
+    WHERE id = ?
+    LIMIT 1
+    `,
+    [productoId]
+  );
 
-      if (row.estado_revision === "OK") resumen.ok = total;
-      if (row.estado_revision === "SIN_CODIGO_VALIDO") resumen.sin_codigo_valido = total;
-      if (row.estado_revision === "SIN_DESCRIPCION") resumen.sin_descripcion = total;
-      if (row.estado_revision === "SIN_FAMILIA") resumen.sin_familia = total;
-      if (row.estado_revision === "SIN_ARMADORA") resumen.sin_armadora = total;
-    });
+  return rows?.[0] || null;
+}
 
-    res.json({
-      ok: true,
-      data: resumen,
-    });
-  } catch (error) {
-    next(error);
+async function validateMediaBelongsToProduct(connection, productoId, mediaId) {
+  const [rows] = await connection.query(
+    `
+    SELECT
+      id,
+      producto_id,
+      rol,
+      activo
+    FROM producto_multimedia
+    WHERE id = ?
+      AND producto_id = ?
+    LIMIT 1
+    `,
+    [mediaId, productoId]
+  );
+
+  return rows?.[0] || null;
+}
+
+async function demoteOtherPrincipalMedia(connection, productoId, exceptMediaId = null) {
+  const params = [productoId];
+
+  let exceptSql = "";
+
+  if (exceptMediaId) {
+    exceptSql = "AND id <> ?";
+    params.push(exceptMediaId);
   }
-});
+
+  await connection.query(
+    `
+    UPDATE producto_multimedia
+    SET
+      rol = 'GALERIA',
+      updated_at = CURRENT_TIMESTAMP
+    WHERE producto_id = ?
+      AND tipo = 'IMAGEN'
+      AND rol = 'PRINCIPAL'
+      AND activo = 1
+      ${exceptSql}
+    `,
+    params
+  );
+}
+
+function m62CleanString(value) {
+  if (value === undefined || value === null) return null;
+
+  const clean = String(value).trim();
+
+  return clean || null;
+}
+
+function m62CleanRequiredString(value) {
+  if (value === undefined || value === null) return "";
+
+  return String(value).trim();
+}
+
+function m62ParseInt(value, fallback = null) {
+  const parsed = Number.parseInt(value, 10);
+
+  if (!Number.isFinite(parsed)) return fallback;
+
+  return parsed;
+}
+
+function m62ParseDecimal(value, fallback = null) {
+  if (value === undefined || value === null || value === "") return fallback;
+
+  const parsed = Number(value);
+
+  if (!Number.isFinite(parsed)) return fallback;
+
+  return parsed;
+}
+
+function m62ParseTiny(value, fallback = 0) {
+  if (value === undefined || value === null || value === "") return fallback;
+
+  if (
+    value === true ||
+    value === 1 ||
+    value === "1" ||
+    String(value).toLowerCase() === "true"
+  ) {
+    return 1;
+  }
+
+  return 0;
+}
+
+function m62CleanTipoMarcaProducto(value) {
+  const clean = String(value || "DESCONOCIDA").trim().toUpperCase();
+
+  if (["OEM", "AFTERMARKET", "GENERICA", "DESCONOCIDA"].includes(clean)) {
+    return clean;
+  }
+
+  return "DESCONOCIDA";
+}
+
+function m62NormalizeProductCode(value) {
+  if (!value) return null;
+
+  return String(value)
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "") || null;
+}
+
+function m62BuildProductPayload(body = {}) {
+  const codigoAndyfers = m62CleanString(body.codigo_andyfers);
+  const codigoImportacion = m62CleanString(body.codigo_importacion);
+
+  return {
+    codigo_andyfers: codigoAndyfers,
+    codigo_andyfers_normalizado: m62NormalizeProductCode(codigoAndyfers),
+    codigo_importacion: codigoImportacion,
+    slug: m62CleanString(body.slug),
+
+    categoria_id: m62ParseInt(body.categoria_id, null),
+
+    clasif_vta: m62CleanString(body.clasif_vta),
+    armadora: m62CleanString(body.armadora),
+    familia: m62CleanString(body.familia),
+
+    marca_producto: m62CleanString(body.marca_producto),
+    tipo_marca_producto: m62CleanTipoMarcaProducto(body.tipo_marca_producto),
+    marca_producto_confirmada: m62ParseTiny(body.marca_producto_confirmada, 0),
+
+    descripcion: m62CleanRequiredString(body.descripcion),
+    imagen_url: m62CleanString(body.imagen_url),
+    descripcion_web: m62CleanString(body.descripcion_web),
+
+    multiplo: m62ParseDecimal(body.multiplo, null),
+    unidad_medida: m62CleanString(body.unidad_medida) || "PZA",
+
+    prioridad_ia: m62ParseInt(body.prioridad_ia, 0),
+
+    destacado: m62ParseTiny(body.destacado, 0),
+    nuevo_web: m62ParseTiny(body.nuevo_web, 0),
+    visible_catalogo: m62ParseTiny(body.visible_catalogo, 1),
+    activo_web: m62ParseTiny(body.activo_web, 1),
+    activo: m62ParseTiny(body.activo, 1),
+  };
+}
+
+function m62ValidateProductPayload(payload, { creating = false } = {}) {
+  const errors = [];
+
+  if (creating && !payload.categoria_id) {
+    errors.push("La categoría es obligatoria.");
+  }
+
+  if (!payload.descripcion) {
+    errors.push("La descripción es obligatoria.");
+  }
+
+  if (!payload.codigo_andyfers && !payload.codigo_importacion) {
+    errors.push("Debes capturar al menos código Andyfers o código importación.");
+  }
+
+  return errors;
+}
+
+//VISIBILIDAD Y ESTADO
+function m64ValidPublicCodeSql(alias = "p") {
+  const invalidValues = `
+    '#N/A',
+    'N/A',
+    'NA',
+    'ND',
+    'N.D.',
+    'SIN CODIGO',
+    'SIN CÓDIGO',
+    'NULL',
+    '0'
+  `;
+
+  return `
+    (
+      (
+        ${alias}.codigo_andyfers IS NOT NULL
+        AND TRIM(${alias}.codigo_andyfers) <> ''
+        AND UPPER(TRIM(${alias}.codigo_andyfers)) NOT IN (${invalidValues})
+      )
+      OR
+      (
+        ${alias}.codigo_importacion IS NOT NULL
+        AND TRIM(${alias}.codigo_importacion) <> ''
+        AND UPPER(TRIM(${alias}.codigo_importacion)) NOT IN (${invalidValues})
+      )
+    )
+  `;
+}
+
+function m64EstadoRevisionSql(alias = "p") {
+  return `
+    CASE
+      WHEN NOT ${m64ValidPublicCodeSql(alias)} THEN 'SIN_CODIGO_VALIDO'
+      WHEN ${alias}.descripcion IS NULL OR TRIM(${alias}.descripcion) = '' THEN 'SIN_DESCRIPCION'
+      WHEN ${alias}.familia IS NULL OR TRIM(${alias}.familia) = '' THEN 'SIN_FAMILIA'
+      WHEN ${alias}.armadora IS NULL OR TRIM(${alias}.armadora) = '' THEN 'SIN_ARMADORA'
+      ELSE 'OK'
+    END
+  `;
+}
+
+function m64VisiblePublicoSql(alias = "p") {
+  return `
+    CASE
+      WHEN ${alias}.activo = 1
+        AND ${alias}.activo_web = 1
+        AND ${alias}.visible_catalogo = 1
+        AND ${m64ValidPublicCodeSql(alias)}
+      THEN 1
+      ELSE 0
+    END
+  `;
+}
+
+function m64MotivoVisibilidadSql(alias = "p") {
+  return `
+    CASE
+      WHEN ${alias}.activo <> 1 THEN 'INACTIVO_INTERNO'
+      WHEN ${alias}.activo_web <> 1 THEN 'ACTIVO_WEB_APAGADO'
+      WHEN ${alias}.visible_catalogo <> 1 THEN 'VISIBLE_CATALOGO_APAGADO'
+      WHEN NOT ${m64ValidPublicCodeSql(alias)} THEN 'SIN_CODIGO_VALIDO'
+      WHEN ${alias}.descripcion IS NULL OR TRIM(${alias}.descripcion) = '' THEN 'SIN_DESCRIPCION'
+      WHEN ${alias}.familia IS NULL OR TRIM(${alias}.familia) = '' THEN 'SIN_FAMILIA'
+      WHEN ${alias}.armadora IS NULL OR TRIM(${alias}.armadora) = '' THEN 'SIN_ARMADORA'
+      ELSE 'VISIBLE'
+    END
+  `;
+}
+
+function m64HasMultimediaSql(alias = "p") {
+  return `
+    EXISTS (
+      SELECT 1
+      FROM producto_multimedia pm_m64
+      WHERE pm_m64.producto_id = ${alias}.id
+        AND pm_m64.tipo = 'IMAGEN'
+        AND pm_m64.activo = 1
+    )
+  `;
+}
+
+function m64ParseTiny(value, fallback = null) {
+  if (value === undefined || value === null || value === "") return fallback;
+
+  if (
+    value === true ||
+    value === 1 ||
+    value === "1" ||
+    String(value).toLowerCase() === "true"
+  ) {
+    return 1;
+  }
+
+  if (
+    value === false ||
+    value === 0 ||
+    value === "0" ||
+    String(value).toLowerCase() === "false"
+  ) {
+    return 0;
+  }
+
+  return fallback;
+}
+
+router.get("/admin/productos/catalogos/categorias",
+  requireAdminAuth,
+  requireRole(["ADMIN", "VENTAS"]),
+  async (req, res, next) => {
+    try {
+      const [rows] = await pool.query(`
+        SELECT
+          id,
+          nombre,
+          nombre_normalizado,
+          activo
+        FROM categorias
+        WHERE activo = 1
+        ORDER BY nombre ASC
+      `);
+
+      res.json({
+        ok: true,
+        data: rows,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.get("/admin/productos/resumen",
+  requireAdminAuth,
+  requireRole(["ADMIN", "VENTAS"]),
+  async (req, res, next) => {
+    try {
+      const [rows] = await pool.query(`
+        SELECT
+          COUNT(*) AS total,
+
+          SUM(CASE WHEN ${m64EstadoRevisionSql("p")} = 'OK' THEN 1 ELSE 0 END) AS ok,
+          SUM(CASE WHEN ${m64EstadoRevisionSql("p")} = 'SIN_CODIGO_VALIDO' THEN 1 ELSE 0 END) AS sin_codigo_valido,
+          SUM(CASE WHEN ${m64EstadoRevisionSql("p")} = 'SIN_DESCRIPCION' THEN 1 ELSE 0 END) AS sin_descripcion,
+          SUM(CASE WHEN ${m64EstadoRevisionSql("p")} = 'SIN_FAMILIA' THEN 1 ELSE 0 END) AS sin_familia,
+          SUM(CASE WHEN ${m64EstadoRevisionSql("p")} = 'SIN_ARMADORA' THEN 1 ELSE 0 END) AS sin_armadora,
+
+          SUM(CASE WHEN ${m64HasMultimediaSql("p")} THEN 1 ELSE 0 END) AS con_multimedia,
+          SUM(CASE WHEN NOT ${m64HasMultimediaSql("p")} THEN 1 ELSE 0 END) AS sin_multimedia,
+
+          SUM(CASE WHEN ${m64VisiblePublicoSql("p")} = 1 THEN 1 ELSE 0 END) AS visibles_publico,
+          SUM(CASE WHEN ${m64VisiblePublicoSql("p")} = 0 THEN 1 ELSE 0 END) AS no_visibles_publico,
+
+          SUM(CASE WHEN p.activo = 1 THEN 1 ELSE 0 END) AS activos_internos,
+          SUM(CASE WHEN p.activo <> 1 THEN 1 ELSE 0 END) AS inactivos_internos,
+
+          SUM(CASE WHEN p.activo_web = 1 THEN 1 ELSE 0 END) AS activo_web_on,
+          SUM(CASE WHEN p.activo_web <> 1 THEN 1 ELSE 0 END) AS activo_web_off,
+
+          SUM(CASE WHEN p.visible_catalogo = 1 THEN 1 ELSE 0 END) AS visible_catalogo_on,
+          SUM(CASE WHEN p.visible_catalogo <> 1 THEN 1 ELSE 0 END) AS visible_catalogo_off,
+
+          SUM(CASE WHEN p.destacado = 1 THEN 1 ELSE 0 END) AS destacados,
+          SUM(CASE WHEN p.nuevo_web = 1 THEN 1 ELSE 0 END) AS nuevos_web
+        FROM productos p
+      `);
+
+      res.json({
+        ok: true,
+        data: rows?.[0] || {
+          total: 0,
+          ok: 0,
+          sin_codigo_valido: 0,
+          sin_descripcion: 0,
+          sin_familia: 0,
+          sin_armadora: 0,
+          con_multimedia: 0,
+          sin_multimedia: 0,
+          visibles_publico: 0,
+          no_visibles_publico: 0,
+          activos_internos: 0,
+          inactivos_internos: 0,
+          activo_web_on: 0,
+          activo_web_off: 0,
+          visible_catalogo_on: 0,
+          visible_catalogo_off: 0,
+          destacados: 0,
+          nuevos_web: 0,
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
 
 router.get("/admin/productos", requireAdminAuth, async (req, res, next) => {
   try {
     const { page, limit, offset } = buildPagination(req.query);
-    const { whereSql, params } = buildProductosWhere(req.query);
+
+    const baseWhere = buildProductosWhere(req.query);
+
+    const baseWhereBody = baseWhere.whereSql
+      ? baseWhere.whereSql.replace(/^WHERE\s+/i, "")
+      : "";
+
+    const conditions = baseWhereBody ? [`(${baseWhereBody})`] : [];
+    const params = [...baseWhere.params];
+
+    if (req.query.estado_revision) {
+      conditions.push(`${m64EstadoRevisionSql("p")} = ?`);
+      params.push(String(req.query.estado_revision));
+    }
+
+    if (req.query.visibilidad_publica === "VISIBLE") {
+      conditions.push(`${m64VisiblePublicoSql("p")} = 1`);
+    }
+
+    if (req.query.visibilidad_publica === "OCULTO") {
+      conditions.push(`${m64VisiblePublicoSql("p")} = 0`);
+    }
+
+    if (req.query.multimedia === "CON_MULTIMEDIA") {
+      conditions.push(`${m64HasMultimediaSql("p")}`);
+    }
+
+    if (req.query.multimedia === "SIN_MULTIMEDIA") {
+      conditions.push(`NOT ${m64HasMultimediaSql("p")}`);
+    }
+
+    if (req.query.activo_web === "1") {
+      conditions.push("p.activo_web = 1");
+    }
+
+    if (req.query.activo_web === "0") {
+      conditions.push("p.activo_web = 0");
+    }
+
+    if (req.query.visible_catalogo === "1") {
+      conditions.push("p.visible_catalogo = 1");
+    }
+
+    if (req.query.visible_catalogo === "0") {
+      conditions.push("p.visible_catalogo = 0");
+    }
+
+    if (req.query.destacado === "1") {
+      conditions.push("p.destacado = 1");
+    }
+
+    if (req.query.destacado === "0") {
+      conditions.push("p.destacado = 0");
+    }
+
+    if (req.query.nuevo_web === "1") {
+      conditions.push("p.nuevo_web = 1");
+    }
+
+    if (req.query.nuevo_web === "0") {
+      conditions.push("p.nuevo_web = 0");
+    }
+
+    const finalWhereSql = conditions.length
+      ? `WHERE ${conditions.join(" AND ")}`
+      : "";
 
     const [countRows] = await pool.query(
       `
       SELECT COUNT(*) AS total
       FROM productos p
-      ${whereSql}
+      LEFT JOIN categorias c ON c.id = p.categoria_id
+      ${finalWhereSql}
       `,
       params
     );
@@ -765,39 +1285,51 @@ router.get("/admin/productos", requireAdminAuth, async (req, res, next) => {
         p.id,
         p.codigo_andyfers,
         p.codigo_importacion,
+        p.categoria_id,
+        c.nombre AS categoria_nombre,
+
         p.familia,
         p.armadora,
         p.descripcion,
+        p.unidad_medida,
+        p.prioridad_ia,
+
         p.activo,
         p.activo_web,
-        p.prioridad_ia,
+        p.visible_catalogo,
+        p.destacado,
+        p.nuevo_web,
+
         p.created_at,
         p.updated_at,
-        ${buildProductoRevisionSql()} AS estado_revision,
-        ${buildPublicVisibilitySql("p")} AS visible_publico,
+
+        ${m64EstadoRevisionSql("p")} AS estado_revision,
+        ${m64VisiblePublicoSql("p")} AS visible_publico,
+        ${m64MotivoVisibilidadSql("p")} AS motivo_visibilidad,
+
         CASE
-          WHEN ${buildPublicVisibilitySql("p")}
-          THEN 'VISIBLE_PUBLICO'
-          WHEN p.activo_web = 0
-          THEN 'OCULTO_MANUAL'
-          WHEN p.activo = 0
-          THEN 'INACTIVO'
-          WHEN NOT ${buildValidProductoCodeSql("p")}
-          THEN 'SIN_CODIGO_VALIDO'
-          ELSE 'NO_VISIBLE'
-        END AS motivo_visibilidad,
-        c.nombre AS categoria_nombre,
+          WHEN ${m64HasMultimediaSql("p")} THEN 1
+          ELSE 0
+        END AS tiene_multimedia,
+
+        (
+          SELECT COUNT(*)
+          FROM producto_multimedia pm_count
+          WHERE pm_count.producto_id = p.id
+            AND pm_count.tipo = 'IMAGEN'
+            AND pm_count.activo = 1
+        ) AS total_multimedia,
+
         ${buildAdminProductoMultimediaSelectSql("p")}
       FROM productos p
       LEFT JOIN categorias c ON c.id = p.categoria_id
-      ${whereSql}
+      ${finalWhereSql}
       ORDER BY
-        CASE ${buildProductoRevisionSql()}
-          WHEN 'SIN_CODIGO_VALIDO' THEN 1
-          WHEN 'SIN_DESCRIPCION' THEN 2
-          WHEN 'SIN_FAMILIA' THEN 3
-          WHEN 'SIN_ARMADORA' THEN 4
-          ELSE 5
+        CASE
+          WHEN ${m64EstadoRevisionSql("p")} <> 'OK' THEN 0
+          WHEN NOT ${m64HasMultimediaSql("p")} THEN 1
+          WHEN ${m64VisiblePublicoSql("p")} = 0 THEN 2
+          ELSE 3
         END ASC,
         p.updated_at DESC,
         p.id DESC
@@ -821,209 +1353,202 @@ router.get("/admin/productos", requireAdminAuth, async (req, res, next) => {
   }
 });
 
-router.get("/admin/productos/:id", requireAdminAuth, async (req, res, next) => {
-  try {
-    const id = Number.parseInt(req.params.id, 10);
-
-    if (!Number.isFinite(id)) {
-      return res.status(400).json({
-        ok: false,
-        error: "ID de producto inválido.",
-      });
-    }
-
-    const [rows] = await pool.query(
-      `
-      SELECT
-        p.*,
-        ${buildProductoRevisionSql()} AS estado_revision,
-        c.nombre AS categoria_nombre
-      FROM productos p
-      LEFT JOIN categorias c ON c.id = p.categoria_id
-      WHERE p.id = ?
-      LIMIT 1
-      `,
-      [id]
-    );
-
-    const producto = rows?.[0];
-
-    if (!producto) {
-      return res.status(404).json({
-        ok: false,
-        error: "Producto no encontrado.",
-      });
-    }
-
-    const [atributos] = await pool.query(
-      `
-      SELECT
-        id,
-        atributo,
-        valor_texto,
-        valor_numero,
-        unidad,
-        visible_web,
-        buscable,
-        orden
-      FROM producto_atributos
-      WHERE producto_id = ?
-      ORDER BY orden ASC, atributo ASC
-      `,
-      [id]
-    );
-
-    const [cruces] = await pool.query(
-      `
-      SELECT
-        pc.id,
-        pc.numero_parte,
-        mc.nombre AS marca
-      FROM producto_cruces pc
-      JOIN marcas_cruce mc ON mc.id = pc.marca_id
-      WHERE pc.producto_id = ?
-      ORDER BY mc.nombre ASC, pc.numero_parte ASC
-      `,
-      [id]
-    );
-
-    const [multimedia] = await pool.query(
-      `
-      SELECT
-        id,
-        tipo,
-        rol,
-        cloudinary_public_id,
-        secure_url,
-        thumbnail_url,
-        codigo_archivo_original,
-        nombre_archivo_original,
-        orden,
-        activo,
-        created_at,
-        updated_at
-      FROM producto_multimedia
-      WHERE producto_id = ?
-      ORDER BY
-        activo DESC,
-        CASE rol
-          WHEN 'PRINCIPAL' THEN 0
-          WHEN 'GALERIA' THEN 1
-          WHEN 'VIDEO' THEN 2
-          ELSE 3
-        END,
-        orden ASC,
-        id ASC
-      `,
-      [id]
-    );
-
-    res.json({
-      ok: true,
-      data: {
-        ...producto,
-        atributos,
-        cruces,
-        multimedia,
-      },
-    });
-  } catch (error) {
-    next(error);
-  }
-});
-
-router.patch("/admin/productos/:id",
+router.get("/admin/productos/:id",
   requireAdminAuth,
   requireRole(["ADMIN", "VENTAS"]),
   async (req, res, next) => {
     try {
-      const id = Number.parseInt(req.params.id, 10);
+      const productoId = Number.parseInt(req.params.id, 10);
 
-      if (!Number.isFinite(id)) {
+      if (!Number.isFinite(productoId)) {
         return res.status(400).json({
           ok: false,
           error: "ID de producto inválido.",
         });
       }
 
-      const codigoAndyfers = cleanString(req.body.codigo_andyfers);
-      const codigoImportacion = cleanString(req.body.codigo_importacion);
-      const familia = cleanString(req.body.familia);
-      const armadora = cleanString(req.body.armadora);
-      const descripcion = cleanString(req.body.descripcion);
-      const unidadMedida = cleanString(req.body.unidad_medida) || "PZA";
-      const prioridadIa = Number.parseInt(req.body.prioridad_ia, 10);
-
-      const activoWeb =
-        req.body.activo_web === true ||
-          req.body.activo_web === 1 ||
-          req.body.activo_web === "1"
-          ? 1
-          : 0;
-
-      const activo =
-        req.body.activo === true ||
-          req.body.activo === 1 ||
-          req.body.activo === "1"
-          ? 1
-          : 0;
-
-      if (isInvalidPublicCode(codigoAndyfers) && isInvalidPublicCode(codigoImportacion)) {
-        return res.status(400).json({
-          ok: false,
-          error:
-            "El producto debe tener al menos código Andyfers o código importación válido.",
-        });
-      }
-
-      if (!descripcion) {
-        return res.status(400).json({
-          ok: false,
-          error: "La descripción es obligatoria.",
-        });
-      }
-
-      if (!familia) {
-        return res.status(400).json({
-          ok: false,
-          error: "La familia es obligatoria.",
-        });
-      }
-
-      await pool.query(
+      const [productos] = await pool.query(
         `
-        UPDATE productos
-        SET
-          codigo_andyfers = ?,
-          codigo_andyfers_normalizado = ?,
-          codigo_importacion = ?,
-          familia = ?,
-          armadora = ?,
-          descripcion = ?,
-          unidad_medida = ?,
-          prioridad_ia = ?,
-          activo_web = ?,
-          activo = ?
-        WHERE id = ?
+        SELECT
+          p.id,
+          p.codigo_andyfers,
+          p.codigo_andyfers_normalizado,
+          p.codigo_importacion,
+          p.slug,
+
+          p.categoria_id,
+          c.nombre AS categoria_nombre,
+
+          p.clasif_vta,
+          p.armadora,
+          p.familia,
+
+          p.marca_producto,
+          p.tipo_marca_producto,
+          p.marca_producto_confirmada,
+
+          p.descripcion,
+          p.imagen_url,
+          p.descripcion_web,
+
+          p.multiplo,
+          p.unidad_medida,
+          p.prioridad_ia,
+
+          p.destacado,
+          p.nuevo_web,
+          p.visible_catalogo,
+          p.activo_web,
+          p.activo,
+
+          p.created_at,
+          p.updated_at,
+
+          CASE
+            WHEN (
+              (p.codigo_andyfers IS NULL OR TRIM(p.codigo_andyfers) = '')
+              AND (p.codigo_importacion IS NULL OR TRIM(p.codigo_importacion) = '')
+            ) THEN 'SIN_CODIGO_VALIDO'
+            WHEN p.descripcion IS NULL OR TRIM(p.descripcion) = '' THEN 'SIN_DESCRIPCION'
+            WHEN p.familia IS NULL OR TRIM(p.familia) = '' THEN 'SIN_FAMILIA'
+            WHEN p.armadora IS NULL OR TRIM(p.armadora) = '' THEN 'SIN_ARMADORA'
+            ELSE 'OK'
+          END AS estado_revision,
+
+          CASE
+            WHEN p.activo = 1
+              AND p.activo_web = 1
+              AND p.visible_catalogo = 1
+              AND (
+                (p.codigo_andyfers IS NOT NULL AND TRIM(p.codigo_andyfers) <> '')
+                OR (p.codigo_importacion IS NOT NULL AND TRIM(p.codigo_importacion) <> '')
+              )
+            THEN 1
+            ELSE 0
+          END AS visible_publico,
+
+          CASE
+            WHEN p.activo <> 1 THEN 'INACTIVO_INTERNO'
+            WHEN p.activo_web <> 1 THEN 'INACTIVO_WEB'
+            WHEN p.visible_catalogo <> 1 THEN 'OCULTO_CATALOGO'
+            WHEN (
+              (p.codigo_andyfers IS NULL OR TRIM(p.codigo_andyfers) = '')
+              AND (p.codigo_importacion IS NULL OR TRIM(p.codigo_importacion) = '')
+            ) THEN 'SIN_CODIGO_VALIDO'
+            ELSE 'VISIBLE'
+          END AS motivo_visibilidad
+        FROM productos p
+        JOIN categorias c ON c.id = p.categoria_id
+        WHERE p.id = ?
+        LIMIT 1
         `,
-        [
-          codigoAndyfers,
-          codigoAndyfers ? normalizePartNumber(codigoAndyfers) : null,
-          codigoImportacion,
-          familia,
-          armadora,
-          descripcion,
-          unidadMedida,
-          Number.isFinite(prioridadIa) ? prioridadIa : 50,
-          activoWeb,
-          activo,
+        [productoId]
+      );
+
+      const producto = productos?.[0];
+
+      if (!producto) {
+        return res.status(404).json({
+          ok: false,
+          error: "Producto no encontrado.",
+        });
+      }
+
+      const [multimedia] = await pool.query(
+        `
+        SELECT
           id,
-        ]
+          tipo,
+          rol,
+          cloudinary_public_id,
+          secure_url,
+          thumbnail_url,
+          codigo_archivo_original,
+          nombre_archivo_original,
+          orden,
+          activo,
+          created_at,
+          updated_at
+        FROM producto_multimedia
+        WHERE producto_id = ?
+        ORDER BY
+          CASE rol
+            WHEN 'PRINCIPAL' THEN 0
+            WHEN 'GALERIA' THEN 1
+            WHEN 'VIDEO' THEN 2
+            ELSE 3
+          END,
+          orden ASC,
+          id ASC
+        `,
+        [productoId]
+      );
+
+      const [atributos] = await pool.query(
+        `
+        SELECT
+          id,
+          atributo,
+          atributo_normalizado,
+          valor_texto,
+          valor_normalizado,
+          valor_numero,
+          unidad,
+          visible_web,
+          buscable,
+          orden
+        FROM producto_atributos
+        WHERE producto_id = ?
+        ORDER BY orden ASC, atributo ASC
+        `,
+        [productoId]
+      );
+
+      const [cruces] = await pool.query(
+        `
+        SELECT
+          pc.id,
+          pc.marca_id,
+          mc.nombre AS marca,
+          pc.numero_parte,
+          pc.numero_parte_normalizado
+        FROM producto_cruces pc
+        JOIN marcas_cruce mc ON mc.id = pc.marca_id
+        WHERE pc.producto_id = ?
+        ORDER BY mc.nombre ASC, pc.numero_parte ASC
+        `,
+        [productoId]
+      );
+
+      const [aplicaciones] = await pool.query(
+        `
+        SELECT
+          id,
+          marca_auto,
+          modelo_auto,
+          motor,
+          anio_inicio,
+          anio_fin,
+          version_auto,
+          fuente,
+          confianza_extraccion,
+          notas
+        FROM producto_aplicaciones
+        WHERE producto_id = ?
+        ORDER BY marca_auto ASC, modelo_auto ASC, anio_inicio ASC
+        `,
+        [productoId]
       );
 
       res.json({
         ok: true,
-        message: "Producto actualizado correctamente.",
+        data: {
+          ...producto,
+          multimedia,
+          atributos,
+          cruces,
+          aplicaciones,
+        },
       });
     } catch (error) {
       next(error);
@@ -1031,7 +1556,238 @@ router.patch("/admin/productos/:id",
   }
 );
 
+router.post("/admin/productos",
+  requireAdminAuth,
+  requireRole(["ADMIN"]),
+  async (req, res, next) => {
+    try {
+      const payload = m62BuildProductPayload(req.body);
+      const errors = m62ValidateProductPayload(payload, { creating: true });
 
+      if (errors.length) {
+        return res.status(400).json({
+          ok: false,
+          error: errors.join(" "),
+        });
+      }
+
+      const [categoriaRows] = await pool.query(
+        `
+        SELECT id
+        FROM categorias
+        WHERE id = ?
+          AND activo = 1
+        LIMIT 1
+        `,
+        [payload.categoria_id]
+      );
+
+      if (!categoriaRows.length) {
+        return res.status(400).json({
+          ok: false,
+          error: "La categoría seleccionada no existe o está inactiva.",
+        });
+      }
+
+      const [result] = await pool.query(
+        `
+        INSERT INTO productos (
+          codigo_andyfers,
+          codigo_andyfers_normalizado,
+          codigo_importacion,
+          slug,
+          categoria_id,
+          clasif_vta,
+          armadora,
+          familia,
+          marca_producto,
+          tipo_marca_producto,
+          marca_producto_confirmada,
+          descripcion,
+          imagen_url,
+          descripcion_web,
+          multiplo,
+          unidad_medida,
+          prioridad_ia,
+          destacado,
+          nuevo_web,
+          visible_catalogo,
+          activo_web,
+          activo
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+        [
+          payload.codigo_andyfers,
+          payload.codigo_andyfers_normalizado,
+          payload.codigo_importacion,
+          payload.slug,
+          payload.categoria_id,
+          payload.clasif_vta,
+          payload.armadora,
+          payload.familia,
+          payload.marca_producto,
+          payload.tipo_marca_producto,
+          payload.marca_producto_confirmada,
+          payload.descripcion,
+          payload.imagen_url,
+          payload.descripcion_web,
+          payload.multiplo,
+          payload.unidad_medida,
+          payload.prioridad_ia,
+          payload.destacado,
+          payload.nuevo_web,
+          payload.visible_catalogo,
+          payload.activo_web,
+          payload.activo,
+        ]
+      );
+
+      res.status(201).json({
+        ok: true,
+        message: "Producto creado correctamente.",
+        data: {
+          id: result.insertId,
+        },
+      });
+    } catch (error) {
+      if (error?.code === "ER_DUP_ENTRY") {
+        return res.status(409).json({
+          ok: false,
+          error: "Ya existe un producto con ese código Andyfers.",
+        });
+      }
+
+      next(error);
+    }
+  }
+);
+
+router.patch("/admin/productos/:id",
+  requireAdminAuth,
+  requireRole(["ADMIN", "VENTAS"]),
+  async (req, res, next) => {
+    try {
+      const productoId = Number.parseInt(req.params.id, 10);
+
+      if (!Number.isFinite(productoId)) {
+        return res.status(400).json({
+          ok: false,
+          error: "ID de producto inválido.",
+        });
+      }
+
+      const payload = m62BuildProductPayload(req.body);
+      const errors = m62ValidateProductPayload(payload);
+
+      if (errors.length) {
+        return res.status(400).json({
+          ok: false,
+          error: errors.join(" "),
+        });
+      }
+
+      if (payload.categoria_id) {
+        const [categoriaRows] = await pool.query(
+          `
+          SELECT id
+          FROM categorias
+          WHERE id = ?
+            AND activo = 1
+          LIMIT 1
+          `,
+          [payload.categoria_id]
+        );
+
+        if (!categoriaRows.length) {
+          return res.status(400).json({
+            ok: false,
+            error: "La categoría seleccionada no existe o está inactiva.",
+          });
+        }
+      }
+
+      const [result] = await pool.query(
+        `
+        UPDATE productos
+        SET
+          codigo_andyfers = ?,
+          codigo_andyfers_normalizado = ?,
+          codigo_importacion = ?,
+          slug = ?,
+          categoria_id = COALESCE(?, categoria_id),
+          clasif_vta = ?,
+          armadora = ?,
+          familia = ?,
+          marca_producto = ?,
+          tipo_marca_producto = ?,
+          marca_producto_confirmada = ?,
+          descripcion = ?,
+          imagen_url = ?,
+          descripcion_web = ?,
+          multiplo = ?,
+          unidad_medida = ?,
+          prioridad_ia = ?,
+          destacado = ?,
+          nuevo_web = ?,
+          visible_catalogo = ?,
+          activo_web = ?,
+          activo = ?,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        `,
+        [
+          payload.codigo_andyfers,
+          payload.codigo_andyfers_normalizado,
+          payload.codigo_importacion,
+          payload.slug,
+          payload.categoria_id,
+          payload.clasif_vta,
+          payload.armadora,
+          payload.familia,
+          payload.marca_producto,
+          payload.tipo_marca_producto,
+          payload.marca_producto_confirmada,
+          payload.descripcion,
+          payload.imagen_url,
+          payload.descripcion_web,
+          payload.multiplo,
+          payload.unidad_medida,
+          payload.prioridad_ia,
+          payload.destacado,
+          payload.nuevo_web,
+          payload.visible_catalogo,
+          payload.activo_web,
+          payload.activo,
+          productoId,
+        ]
+      );
+
+      if (result.affectedRows === 0) {
+        return res.status(404).json({
+          ok: false,
+          error: "Producto no encontrado.",
+        });
+      }
+
+      res.json({
+        ok: true,
+        message: "Producto actualizado correctamente.",
+      });
+    } catch (error) {
+      if (error?.code === "ER_DUP_ENTRY") {
+        return res.status(409).json({
+          ok: false,
+          error: "Ya existe otro producto con ese código Andyfers.",
+        });
+      }
+
+      next(error);
+    }
+  }
+);
+
+//HEROS
 function parseBooleanFlag(value, fallback = 1) {
   if (value === undefined || value === null || value === "") return fallback;
 
@@ -1104,8 +1860,7 @@ router.get("/admin/home/hero-slides", requireAdminAuth, async (req, res, next) =
   }
 });
 
-router.post(
-  "/admin/home/hero-slides",
+router.post("/admin/home/hero-slides",
   requireAdminAuth,
   requireRole(["ADMIN"]),
   async (req, res, next) => {
@@ -1169,8 +1924,7 @@ router.post(
   }
 );
 
-router.patch(
-  "/admin/home/hero-slides/:id",
+router.patch("/admin/home/hero-slides/:id",
   requireAdminAuth,
   requireRole(["ADMIN"]),
   async (req, res, next) => {
@@ -1248,8 +2002,7 @@ router.patch(
   }
 );
 
-router.delete(
-  "/admin/home/hero-slides/:id",
+router.delete("/admin/home/hero-slides/:id",
   requireAdminAuth,
   requireRole(["ADMIN"]),
   async (req, res, next) => {
@@ -1282,6 +2035,1207 @@ router.delete(
       res.json({
         ok: true,
         message: "Flyer desactivado correctamente.",
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+//UPLOAD
+router.post("/admin/productos/:id/multimedia/upload",
+  requireAdminAuth,
+  requireRole(["ADMIN", "VENTAS"]),
+  upload.single("file"),
+  async (req, res, next) => {
+    const connection = await pool.getConnection();
+
+    try {
+      const productoId = Number.parseInt(req.params.id, 10);
+
+      if (!Number.isFinite(productoId)) {
+        return res.status(400).json({
+          ok: false,
+          error: "ID de producto inválido.",
+        });
+      }
+
+      if (!req.file) {
+        return res.status(400).json({
+          ok: false,
+          error: "La imagen es obligatoria.",
+        });
+      }
+
+      const producto = await getProductoForAdminMedia(connection, productoId);
+
+      if (!producto) {
+        return res.status(404).json({
+          ok: false,
+          error: "Producto no encontrado.",
+        });
+      }
+
+      const rol = cleanMediaRole(req.body.rol);
+      const orden = parseMediaOrder(req.body.orden, 1);
+      const codigoArchivoOriginal =
+        cleanString(req.body.codigo_archivo_original) ||
+        cleanString(req.body.codigo_archivo) ||
+        null;
+
+      const nombreArchivoOriginal =
+        cleanString(req.body.nombre_archivo_original) ||
+        req.file.originalname ||
+        null;
+
+      const publicId = buildProductMediaPublicId(
+        producto,
+        req.file.originalname,
+        rol
+      );
+
+      const uploadResponse = await uploadBufferToCloudinary(req.file.buffer, {
+        public_id: publicId,
+        resource_type: "image",
+        overwrite: rol === "PRINCIPAL",
+        unique_filename: false,
+        folder: undefined,
+        tags: [
+          "andyfers",
+          "producto",
+          sanitizeCloudinarySegment(
+            producto.codigo_andyfers || producto.codigo_importacion || producto.id
+          ),
+          rol.toLowerCase(),
+        ],
+      });
+
+      const secureUrl = uploadResponse.secure_url;
+      const thumbnailUrl = buildThumbnailUrl(secureUrl);
+
+      await connection.beginTransaction();
+
+      if (rol === "PRINCIPAL") {
+        await demoteOtherPrincipalMedia(connection, productoId);
+      }
+
+      const [insertResult] = await connection.query(
+        `
+        INSERT INTO producto_multimedia (
+          producto_id,
+          tipo,
+          rol,
+          cloudinary_public_id,
+          secure_url,
+          thumbnail_url,
+          codigo_archivo_original,
+          nombre_archivo_original,
+          orden,
+          activo
+        )
+        VALUES (?, 'IMAGEN', ?, ?, ?, ?, ?, ?, ?, 1)
+        `,
+        [
+          productoId,
+          rol,
+          uploadResponse.public_id,
+          secureUrl,
+          thumbnailUrl,
+          codigoArchivoOriginal,
+          nombreArchivoOriginal,
+          orden,
+        ]
+      );
+
+      await connection.commit();
+
+      res.status(201).json({
+        ok: true,
+        message: "Imagen subida correctamente.",
+        data: {
+          id: insertResult.insertId,
+          producto_id: productoId,
+          tipo: "IMAGEN",
+          rol,
+          cloudinary_public_id: uploadResponse.public_id,
+          secure_url: secureUrl,
+          thumbnail_url: thumbnailUrl,
+          codigo_archivo_original: codigoArchivoOriginal,
+          nombre_archivo_original: nombreArchivoOriginal,
+          orden,
+          activo: 1,
+        },
+      });
+    } catch (error) {
+      await connection.rollback();
+      next(error);
+    } finally {
+      connection.release();
+    }
+  }
+);
+
+router.post("/admin/productos/:id/multimedia",
+  requireAdminAuth,
+  requireRole(["ADMIN", "VENTAS"]),
+  async (req, res, next) => {
+    const connection = await pool.getConnection();
+
+    try {
+      const productoId = Number.parseInt(req.params.id, 10);
+
+      if (!Number.isFinite(productoId)) {
+        return res.status(400).json({
+          ok: false,
+          error: "ID de producto inválido.",
+        });
+      }
+
+      const producto = await getProductoForAdminMedia(connection, productoId);
+
+      if (!producto) {
+        return res.status(404).json({
+          ok: false,
+          error: "Producto no encontrado.",
+        });
+      }
+
+      const tipo = cleanMediaType(req.body.tipo);
+      const rol = cleanMediaRole(req.body.rol);
+      const secureUrl = cleanString(req.body.secure_url);
+      const thumbnailUrl =
+        cleanString(req.body.thumbnail_url) || buildThumbnailUrl(secureUrl);
+      const cloudinaryPublicId = cleanString(req.body.cloudinary_public_id);
+      const orden = parseMediaOrder(req.body.orden, 1);
+      const activo = parseTinyBoolean(req.body.activo, 1);
+
+      if (!secureUrl) {
+        return res.status(400).json({
+          ok: false,
+          error: "La URL segura de Cloudinary es obligatoria.",
+        });
+      }
+
+      await connection.beginTransaction();
+
+      if (tipo === "IMAGEN" && rol === "PRINCIPAL" && activo === 1) {
+        await demoteOtherPrincipalMedia(connection, productoId);
+      }
+
+      const [insertResult] = await connection.query(
+        `
+        INSERT INTO producto_multimedia (
+          producto_id,
+          tipo,
+          rol,
+          cloudinary_public_id,
+          secure_url,
+          thumbnail_url,
+          codigo_archivo_original,
+          nombre_archivo_original,
+          orden,
+          activo
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+        [
+          productoId,
+          tipo,
+          rol,
+          cloudinaryPublicId,
+          secureUrl,
+          thumbnailUrl,
+          cleanString(req.body.codigo_archivo_original),
+          cleanString(req.body.nombre_archivo_original),
+          orden,
+          activo,
+        ]
+      );
+
+      await connection.commit();
+
+      res.status(201).json({
+        ok: true,
+        message: "Multimedia agregada correctamente.",
+        data: {
+          id: insertResult.insertId,
+          producto_id: productoId,
+          tipo,
+          rol,
+          cloudinary_public_id: cloudinaryPublicId,
+          secure_url: secureUrl,
+          thumbnail_url: thumbnailUrl,
+          orden,
+          activo,
+        },
+      });
+    } catch (error) {
+      await connection.rollback();
+      next(error);
+    } finally {
+      connection.release();
+    }
+  }
+);
+
+router.patch("/admin/productos/:id/multimedia/:mediaId",
+  requireAdminAuth,
+  requireRole(["ADMIN", "VENTAS"]),
+  async (req, res, next) => {
+    const connection = await pool.getConnection();
+
+    try {
+      const productoId = Number.parseInt(req.params.id, 10);
+      const mediaId = Number.parseInt(req.params.mediaId, 10);
+
+      if (!Number.isFinite(productoId) || !Number.isFinite(mediaId)) {
+        return res.status(400).json({
+          ok: false,
+          error: "ID inválido.",
+        });
+      }
+
+      const media = await validateMediaBelongsToProduct(
+        connection,
+        productoId,
+        mediaId
+      );
+
+      if (!media) {
+        return res.status(404).json({
+          ok: false,
+          error: "Multimedia no encontrada para este producto.",
+        });
+      }
+
+      const tipo = cleanMediaType(req.body.tipo || "IMAGEN");
+      const rol = cleanMediaRole(req.body.rol || media.rol);
+      const activo = parseTinyBoolean(req.body.activo, Number(media.activo) === 1 ? 1 : 0);
+      const secureUrl = cleanString(req.body.secure_url);
+      const thumbnailUrl =
+        cleanString(req.body.thumbnail_url) ||
+        (secureUrl ? buildThumbnailUrl(secureUrl) : null);
+
+      await connection.beginTransaction();
+
+      if (tipo === "IMAGEN" && rol === "PRINCIPAL" && activo === 1) {
+        await demoteOtherPrincipalMedia(connection, productoId, mediaId);
+      }
+
+      await connection.query(
+        `
+        UPDATE producto_multimedia
+        SET
+          tipo = ?,
+          rol = ?,
+          cloudinary_public_id = ?,
+          secure_url = COALESCE(?, secure_url),
+          thumbnail_url = COALESCE(?, thumbnail_url),
+          codigo_archivo_original = ?,
+          nombre_archivo_original = ?,
+          orden = ?,
+          activo = ?,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+          AND producto_id = ?
+        `,
+        [
+          tipo,
+          rol,
+          cleanString(req.body.cloudinary_public_id),
+          secureUrl,
+          thumbnailUrl,
+          cleanString(req.body.codigo_archivo_original),
+          cleanString(req.body.nombre_archivo_original),
+          parseMediaOrder(req.body.orden, 1),
+          activo,
+          mediaId,
+          productoId,
+        ]
+      );
+
+      await connection.commit();
+
+      res.json({
+        ok: true,
+        message: "Multimedia actualizada correctamente.",
+      });
+    } catch (error) {
+      await connection.rollback();
+      next(error);
+    } finally {
+      connection.release();
+    }
+  }
+);
+
+router.delete("/admin/productos/:id/multimedia/:mediaId",
+  requireAdminAuth,
+  requireRole(["ADMIN", "VENTAS"]),
+  async (req, res, next) => {
+    try {
+      const productoId = Number.parseInt(req.params.id, 10);
+      const mediaId = Number.parseInt(req.params.mediaId, 10);
+
+      if (!Number.isFinite(productoId) || !Number.isFinite(mediaId)) {
+        return res.status(400).json({
+          ok: false,
+          error: "ID inválido.",
+        });
+      }
+
+      const [result] = await pool.query(
+        `
+        UPDATE producto_multimedia
+        SET
+          activo = 0,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+          AND producto_id = ?
+        `,
+        [mediaId, productoId]
+      );
+
+      if (result.affectedRows === 0) {
+        return res.status(404).json({
+          ok: false,
+          error: "Multimedia no encontrada para este producto.",
+        });
+      }
+
+      res.json({
+        ok: true,
+        message: "Multimedia desactivada correctamente.",
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+//DELETE PRODUCTO
+router.delete("/admin/productos/:id",
+  requireAdminAuth,
+  requireRole(["ADMIN"]),
+  async (req, res, next) => {
+    try {
+      const productoId = Number.parseInt(req.params.id, 10);
+
+      if (!Number.isFinite(productoId)) {
+        return res.status(400).json({
+          ok: false,
+          error: "ID de producto inválido.",
+        });
+      }
+
+      const [result] = await pool.query(
+        `
+        UPDATE productos
+        SET
+          activo = 0,
+          activo_web = 0,
+          visible_catalogo = 0,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        `,
+        [productoId]
+      );
+
+      if (result.affectedRows === 0) {
+        return res.status(404).json({
+          ok: false,
+          error: "Producto no encontrado.",
+        });
+      }
+
+      res.json({
+        ok: true,
+        message: "Producto desactivado correctamente.",
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+//ATRIBUTOS
+function m63CleanString(value) {
+  if (value === undefined || value === null) return null;
+
+  const clean = String(value).trim();
+
+  return clean || null;
+}
+
+function m63RequiredString(value) {
+  if (value === undefined || value === null) return "";
+
+  return String(value).trim();
+}
+
+function m63ParseInt(value, fallback = null) {
+  const parsed = Number.parseInt(value, 10);
+
+  if (!Number.isFinite(parsed)) return fallback;
+
+  return parsed;
+}
+
+function m63ParseDecimal(value, fallback = null) {
+  if (value === undefined || value === null || value === "") return fallback;
+
+  const parsed = Number(value);
+
+  if (!Number.isFinite(parsed)) return fallback;
+
+  return parsed;
+}
+
+function m63ParseTiny(value, fallback = 0) {
+  if (value === undefined || value === null || value === "") return fallback;
+
+  if (
+    value === true ||
+    value === 1 ||
+    value === "1" ||
+    String(value).toLowerCase() === "true"
+  ) {
+    return 1;
+  }
+
+  return 0;
+}
+
+function m63NormalizeText(value) {
+  if (!value) return null;
+
+  return String(value)
+    .trim()
+    .toUpperCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^A-Z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim() || null;
+}
+
+function m63NormalizePartNumber(value) {
+  if (!value) return null;
+
+  return String(value)
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "") || null;
+}
+
+async function m63EnsureProductExists(productoId) {
+  const [rows] = await pool.query(
+    `
+    SELECT id
+    FROM productos
+    WHERE id = ?
+    LIMIT 1
+    `,
+    [productoId]
+  );
+
+  return rows?.[0] || null;
+}
+
+async function m63GetOrCreateMarcaCruce(nombreMarca) {
+  const nombre = m63RequiredString(nombreMarca);
+
+  if (!nombre) return null;
+
+  const nombreNormalizado = m63NormalizeText(nombre);
+
+  const [existingRows] = await pool.query(
+    `
+    SELECT id
+    FROM marcas_cruce
+    WHERE nombre_normalizado = ?
+       OR UPPER(TRIM(nombre)) = UPPER(TRIM(?))
+    LIMIT 1
+    `,
+    [nombreNormalizado, nombre]
+  );
+
+  if (existingRows.length) {
+    return existingRows[0].id;
+  }
+
+  const [result] = await pool.query(
+    `
+    INSERT INTO marcas_cruce (
+      nombre,
+      nombre_normalizado,
+      activo
+    )
+    VALUES (?, ?, 1)
+    `,
+    [nombre, nombreNormalizado]
+  );
+
+  return result.insertId;
+}
+
+router.post("/admin/productos/:id/atributos",
+  requireAdminAuth,
+  requireRole(["ADMIN", "VENTAS"]),
+  async (req, res, next) => {
+    try {
+      const productoId = m63ParseInt(req.params.id);
+
+      if (!productoId) {
+        return res.status(400).json({
+          ok: false,
+          error: "ID de producto inválido.",
+        });
+      }
+
+      const producto = await m63EnsureProductExists(productoId);
+
+      if (!producto) {
+        return res.status(404).json({
+          ok: false,
+          error: "Producto no encontrado.",
+        });
+      }
+
+      const atributo = m63RequiredString(req.body.atributo);
+      const valorTexto = m63RequiredString(req.body.valor_texto);
+
+      if (!atributo || !valorTexto) {
+        return res.status(400).json({
+          ok: false,
+          error: "Atributo y valor son obligatorios.",
+        });
+      }
+
+      const [result] = await pool.query(
+        `
+        INSERT INTO producto_atributos (
+          producto_id,
+          atributo,
+          atributo_normalizado,
+          valor_texto,
+          valor_normalizado,
+          valor_numero,
+          unidad,
+          visible_web,
+          buscable,
+          orden
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+        [
+          productoId,
+          atributo,
+          m63NormalizeText(atributo),
+          valorTexto,
+          m63NormalizeText(valorTexto),
+          m63ParseDecimal(req.body.valor_numero, null),
+          m63CleanString(req.body.unidad),
+          m63ParseTiny(req.body.visible_web, 1),
+          m63ParseTiny(req.body.buscable, 1),
+          m63ParseInt(req.body.orden, 0),
+        ]
+      );
+
+      res.status(201).json({
+        ok: true,
+        message: "Atributo creado correctamente.",
+        data: {
+          id: result.insertId,
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.patch("/admin/productos/:id/atributos/:atributoId",
+  requireAdminAuth,
+  requireRole(["ADMIN", "VENTAS"]),
+  async (req, res, next) => {
+    try {
+      const productoId = m63ParseInt(req.params.id);
+      const atributoId = m63ParseInt(req.params.atributoId);
+
+      if (!productoId || !atributoId) {
+        return res.status(400).json({
+          ok: false,
+          error: "ID inválido.",
+        });
+      }
+
+      const atributo = m63RequiredString(req.body.atributo);
+      const valorTexto = m63RequiredString(req.body.valor_texto);
+
+      if (!atributo || !valorTexto) {
+        return res.status(400).json({
+          ok: false,
+          error: "Atributo y valor son obligatorios.",
+        });
+      }
+
+      const [result] = await pool.query(
+        `
+        UPDATE producto_atributos
+        SET
+          atributo = ?,
+          atributo_normalizado = ?,
+          valor_texto = ?,
+          valor_normalizado = ?,
+          valor_numero = ?,
+          unidad = ?,
+          visible_web = ?,
+          buscable = ?,
+          orden = ?
+        WHERE id = ?
+          AND producto_id = ?
+        `,
+        [
+          atributo,
+          m63NormalizeText(atributo),
+          valorTexto,
+          m63NormalizeText(valorTexto),
+          m63ParseDecimal(req.body.valor_numero, null),
+          m63CleanString(req.body.unidad),
+          m63ParseTiny(req.body.visible_web, 1),
+          m63ParseTiny(req.body.buscable, 1),
+          m63ParseInt(req.body.orden, 0),
+          atributoId,
+          productoId,
+        ]
+      );
+
+      if (result.affectedRows === 0) {
+        return res.status(404).json({
+          ok: false,
+          error: "Atributo no encontrado.",
+        });
+      }
+
+      res.json({
+        ok: true,
+        message: "Atributo actualizado correctamente.",
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.delete("/admin/productos/:id/atributos/:atributoId",
+  requireAdminAuth,
+  requireRole(["ADMIN", "VENTAS"]),
+  async (req, res, next) => {
+    try {
+      const productoId = m63ParseInt(req.params.id);
+      const atributoId = m63ParseInt(req.params.atributoId);
+
+      if (!productoId || !atributoId) {
+        return res.status(400).json({
+          ok: false,
+          error: "ID inválido.",
+        });
+      }
+
+      const [result] = await pool.query(
+        `
+        DELETE FROM producto_atributos
+        WHERE id = ?
+          AND producto_id = ?
+        `,
+        [atributoId, productoId]
+      );
+
+      if (result.affectedRows === 0) {
+        return res.status(404).json({
+          ok: false,
+          error: "Atributo no encontrado.",
+        });
+      }
+
+      res.json({
+        ok: true,
+        message: "Atributo eliminado correctamente.",
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+//cruces
+router.post("/admin/productos/:id/cruces",
+  requireAdminAuth,
+  requireRole(["ADMIN", "VENTAS"]),
+  async (req, res, next) => {
+    try {
+      const productoId = m63ParseInt(req.params.id);
+
+      if (!productoId) {
+        return res.status(400).json({
+          ok: false,
+          error: "ID de producto inválido.",
+        });
+      }
+
+      const producto = await m63EnsureProductExists(productoId);
+
+      if (!producto) {
+        return res.status(404).json({
+          ok: false,
+          error: "Producto no encontrado.",
+        });
+      }
+
+      const marcaNombre = m63RequiredString(req.body.marca);
+      const numeroParte = m63RequiredString(req.body.numero_parte);
+
+      if (!marcaNombre || !numeroParte) {
+        return res.status(400).json({
+          ok: false,
+          error: "Marca y número de parte son obligatorios.",
+        });
+      }
+
+      const marcaId = await m63GetOrCreateMarcaCruce(marcaNombre);
+
+      const [result] = await pool.query(
+        `
+        INSERT INTO producto_cruces (
+          producto_id,
+          marca_id,
+          numero_parte,
+          numero_parte_normalizado
+        )
+        VALUES (?, ?, ?, ?)
+        `,
+        [
+          productoId,
+          marcaId,
+          numeroParte,
+          m63NormalizePartNumber(numeroParte),
+        ]
+      );
+
+      res.status(201).json({
+        ok: true,
+        message: "Cruce creado correctamente.",
+        data: {
+          id: result.insertId,
+        },
+      });
+    } catch (error) {
+      if (error?.code === "ER_DUP_ENTRY") {
+        return res.status(409).json({
+          ok: false,
+          error: "Ese cruce ya existe para el producto.",
+        });
+      }
+
+      next(error);
+    }
+  }
+);
+
+router.patch("/admin/productos/:id/cruces/:cruceId",
+  requireAdminAuth,
+  requireRole(["ADMIN", "VENTAS"]),
+  async (req, res, next) => {
+    try {
+      const productoId = m63ParseInt(req.params.id);
+      const cruceId = m63ParseInt(req.params.cruceId);
+
+      if (!productoId || !cruceId) {
+        return res.status(400).json({
+          ok: false,
+          error: "ID inválido.",
+        });
+      }
+
+      const marcaNombre = m63RequiredString(req.body.marca);
+      const numeroParte = m63RequiredString(req.body.numero_parte);
+
+      if (!marcaNombre || !numeroParte) {
+        return res.status(400).json({
+          ok: false,
+          error: "Marca y número de parte son obligatorios.",
+        });
+      }
+
+      const marcaId = await m63GetOrCreateMarcaCruce(marcaNombre);
+
+      const [result] = await pool.query(
+        `
+        UPDATE producto_cruces
+        SET
+          marca_id = ?,
+          numero_parte = ?,
+          numero_parte_normalizado = ?
+        WHERE id = ?
+          AND producto_id = ?
+        `,
+        [
+          marcaId,
+          numeroParte,
+          m63NormalizePartNumber(numeroParte),
+          cruceId,
+          productoId,
+        ]
+      );
+
+      if (result.affectedRows === 0) {
+        return res.status(404).json({
+          ok: false,
+          error: "Cruce no encontrado.",
+        });
+      }
+
+      res.json({
+        ok: true,
+        message: "Cruce actualizado correctamente.",
+      });
+    } catch (error) {
+      if (error?.code === "ER_DUP_ENTRY") {
+        return res.status(409).json({
+          ok: false,
+          error: "Ese cruce ya existe para el producto.",
+        });
+      }
+
+      next(error);
+    }
+  }
+);
+
+router.delete("/admin/productos/:id/cruces/:cruceId",
+  requireAdminAuth,
+  requireRole(["ADMIN", "VENTAS"]),
+  async (req, res, next) => {
+    try {
+      const productoId = m63ParseInt(req.params.id);
+      const cruceId = m63ParseInt(req.params.cruceId);
+
+      if (!productoId || !cruceId) {
+        return res.status(400).json({
+          ok: false,
+          error: "ID inválido.",
+        });
+      }
+
+      const [result] = await pool.query(
+        `
+        DELETE FROM producto_cruces
+        WHERE id = ?
+          AND producto_id = ?
+        `,
+        [cruceId, productoId]
+      );
+
+      if (result.affectedRows === 0) {
+        return res.status(404).json({
+          ok: false,
+          error: "Cruce no encontrado.",
+        });
+      }
+
+      res.json({
+        ok: true,
+        message: "Cruce eliminado correctamente.",
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+//APLICACIONES
+router.post("/admin/productos/:id/aplicaciones",
+  requireAdminAuth,
+  requireRole(["ADMIN", "VENTAS"]),
+  async (req, res, next) => {
+    try {
+      const productoId = m63ParseInt(req.params.id);
+
+      if (!productoId) {
+        return res.status(400).json({
+          ok: false,
+          error: "ID de producto inválido.",
+        });
+      }
+
+      const producto = await m63EnsureProductExists(productoId);
+
+      if (!producto) {
+        return res.status(404).json({
+          ok: false,
+          error: "Producto no encontrado.",
+        });
+      }
+
+      const marcaAuto = m63RequiredString(req.body.marca_auto);
+      const modeloAuto = m63RequiredString(req.body.modelo_auto);
+
+      if (!marcaAuto || !modeloAuto) {
+        return res.status(400).json({
+          ok: false,
+          error: "Marca y modelo del vehículo son obligatorios.",
+        });
+      }
+
+      const anioInicio = m63ParseInt(req.body.anio_inicio, null);
+      const anioFin = m63ParseInt(req.body.anio_fin, null);
+
+      if (anioInicio && anioFin && anioInicio > anioFin) {
+        return res.status(400).json({
+          ok: false,
+          error: "El año inicio no puede ser mayor al año fin.",
+        });
+      }
+
+      const [result] = await pool.query(
+        `
+        INSERT INTO producto_aplicaciones (
+          producto_id,
+          marca_auto,
+          modelo_auto,
+          motor,
+          anio_inicio,
+          anio_fin,
+          version_auto,
+          fuente,
+          confianza_extraccion,
+          notas
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+        [
+          productoId,
+          marcaAuto,
+          modeloAuto,
+          m63CleanString(req.body.motor),
+          anioInicio,
+          anioFin,
+          m63CleanString(req.body.version_auto),
+          m63CleanString(req.body.fuente) || "MANUAL_ADMIN",
+          m63ParseDecimal(req.body.confianza_extraccion, 1),
+          m63CleanString(req.body.notas),
+        ]
+      );
+
+      res.status(201).json({
+        ok: true,
+        message: "Aplicación creada correctamente.",
+        data: {
+          id: result.insertId,
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.patch("/admin/productos/:id/aplicaciones/:aplicacionId",
+  requireAdminAuth,
+  requireRole(["ADMIN", "VENTAS"]),
+  async (req, res, next) => {
+    try {
+      const productoId = m63ParseInt(req.params.id);
+      const aplicacionId = m63ParseInt(req.params.aplicacionId);
+
+      if (!productoId || !aplicacionId) {
+        return res.status(400).json({
+          ok: false,
+          error: "ID inválido.",
+        });
+      }
+
+      const marcaAuto = m63RequiredString(req.body.marca_auto);
+      const modeloAuto = m63RequiredString(req.body.modelo_auto);
+
+      if (!marcaAuto || !modeloAuto) {
+        return res.status(400).json({
+          ok: false,
+          error: "Marca y modelo del vehículo son obligatorios.",
+        });
+      }
+
+      const anioInicio = m63ParseInt(req.body.anio_inicio, null);
+      const anioFin = m63ParseInt(req.body.anio_fin, null);
+
+      if (anioInicio && anioFin && anioInicio > anioFin) {
+        return res.status(400).json({
+          ok: false,
+          error: "El año inicio no puede ser mayor al año fin.",
+        });
+      }
+
+      const [result] = await pool.query(
+        `
+        UPDATE producto_aplicaciones
+        SET
+          marca_auto = ?,
+          modelo_auto = ?,
+          motor = ?,
+          anio_inicio = ?,
+          anio_fin = ?,
+          version_auto = ?,
+          fuente = ?,
+          confianza_extraccion = ?,
+          notas = ?
+        WHERE id = ?
+          AND producto_id = ?
+        `,
+        [
+          marcaAuto,
+          modeloAuto,
+          m63CleanString(req.body.motor),
+          anioInicio,
+          anioFin,
+          m63CleanString(req.body.version_auto),
+          m63CleanString(req.body.fuente) || "MANUAL_ADMIN",
+          m63ParseDecimal(req.body.confianza_extraccion, 1),
+          m63CleanString(req.body.notas),
+          aplicacionId,
+          productoId,
+        ]
+      );
+
+      if (result.affectedRows === 0) {
+        return res.status(404).json({
+          ok: false,
+          error: "Aplicación no encontrada.",
+        });
+      }
+
+      res.json({
+        ok: true,
+        message: "Aplicación actualizada correctamente.",
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.delete("/admin/productos/:id/aplicaciones/:aplicacionId",
+  requireAdminAuth,
+  requireRole(["ADMIN", "VENTAS"]),
+  async (req, res, next) => {
+    try {
+      const productoId = m63ParseInt(req.params.id);
+      const aplicacionId = m63ParseInt(req.params.aplicacionId);
+
+      if (!productoId || !aplicacionId) {
+        return res.status(400).json({
+          ok: false,
+          error: "ID inválido.",
+        });
+      }
+
+      const [result] = await pool.query(
+        `
+        DELETE FROM producto_aplicaciones
+        WHERE id = ?
+          AND producto_id = ?
+        `,
+        [aplicacionId, productoId]
+      );
+
+      if (result.affectedRows === 0) {
+        return res.status(404).json({
+          ok: false,
+          error: "Aplicación no encontrada.",
+        });
+      }
+
+      res.json({
+        ok: true,
+        message: "Aplicación eliminada correctamente.",
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+//ACCIONES RAPIDAS
+router.patch("/admin/productos/:id/acciones-rapidas",
+  requireAdminAuth,
+  requireRole(["ADMIN", "VENTAS"]),
+  async (req, res, next) => {
+    try {
+      const productoId = Number.parseInt(req.params.id, 10);
+
+      if (!Number.isFinite(productoId)) {
+        return res.status(400).json({
+          ok: false,
+          error: "ID de producto inválido.",
+        });
+      }
+
+      const allowedFields = [
+        "activo_web",
+        "visible_catalogo",
+        "destacado",
+        "nuevo_web",
+      ];
+
+      const updates = [];
+      const params = [];
+
+      for (const field of allowedFields) {
+        if (Object.prototype.hasOwnProperty.call(req.body, field)) {
+          const value = m64ParseTiny(req.body[field], null);
+
+          if (value === null) {
+            return res.status(400).json({
+              ok: false,
+              error: `Valor inválido para ${field}.`,
+            });
+          }
+
+          updates.push(`${field} = ?`);
+          params.push(value);
+        }
+      }
+
+      if (!updates.length) {
+        return res.status(400).json({
+          ok: false,
+          error: "No hay cambios válidos para aplicar.",
+        });
+      }
+
+      params.push(productoId);
+
+      const [result] = await pool.query(
+        `
+        UPDATE productos
+        SET
+          ${updates.join(", ")},
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        `,
+        params
+      );
+
+      if (result.affectedRows === 0) {
+        return res.status(404).json({
+          ok: false,
+          error: "Producto no encontrado.",
+        });
+      }
+
+      res.json({
+        ok: true,
+        message: "Acción rápida aplicada correctamente.",
       });
     } catch (error) {
       next(error);
