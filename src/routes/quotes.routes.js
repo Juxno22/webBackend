@@ -75,6 +75,51 @@ function placeholders(values) {
     return values.map(() => "?").join(", ");
 }
 
+function buildQuoteProductMultimediaSelectSql(alias = "p") {
+    return `
+        (
+            SELECT pm.thumbnail_url
+            FROM producto_multimedia pm
+            WHERE pm.producto_id = ${alias}.id
+              AND pm.tipo = 'IMAGEN'
+              AND pm.activo = 1
+            ORDER BY
+              CASE pm.rol
+                WHEN 'PRINCIPAL' THEN 0
+                WHEN 'GALERIA' THEN 1
+                ELSE 2
+              END,
+              pm.orden ASC,
+              pm.id ASC
+            LIMIT 1
+        ) AS imagen_thumbnail_url,
+
+        (
+            SELECT pm.secure_url
+            FROM producto_multimedia pm
+            WHERE pm.producto_id = ${alias}.id
+              AND pm.tipo = 'IMAGEN'
+              AND pm.activo = 1
+            ORDER BY
+              CASE pm.rol
+                WHEN 'PRINCIPAL' THEN 0
+                WHEN 'GALERIA' THEN 1
+                ELSE 2
+              END,
+              pm.orden ASC,
+              pm.id ASC
+            LIMIT 1
+        ) AS imagen_url,
+
+        (
+            SELECT COUNT(*)
+            FROM producto_multimedia pm
+            WHERE pm.producto_id = ${alias}.id
+              AND pm.tipo = 'IMAGEN'
+              AND pm.activo = 1
+        ) AS total_imagenes
+    `;
+}
 
 function stringifyReasons(value) {
     if (!value) return null;
@@ -284,6 +329,7 @@ router.get("/cotizaciones/productos-relacionados", async (req, res, next) => {
                 p.familia,
                 p.armadora,
                 c.nombre AS categoria,
+                ${buildQuoteProductMultimediaSelectSql("p")},
                 0 AS total_cruces,
                 (${scoreSql}) AS score_relacion
             FROM productos p

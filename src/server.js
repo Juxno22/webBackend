@@ -8,6 +8,7 @@ import { errorHandler, notFoundHandler } from "./middleware/errorHandler.js";
 import catalogoRoutes from './routes/catalog.routes.js'
 import quoteRoutes from './routes/quotes.routes.js'
 import adminRoutes from "./routes/admin.routes.js";
+import homeRoutes from "./routes/home.routes.js";
 import aiRoutes from './routes/ai.routes.js';
 
 const app = express();
@@ -46,6 +47,7 @@ app.get("/", (req, res) => {
 app.use("/api", healthRoutes);
 app.use("/api", catalogoRoutes);
 app.use("/api", quoteRoutes);
+app.use("/api", homeRoutes);
 app.use("/api", adminRoutes);
 app.use("/api", aiRoutes);
 

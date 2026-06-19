@@ -1031,4 +1031,262 @@ router.patch("/admin/productos/:id",
   }
 );
 
+
+function parseBooleanFlag(value, fallback = 1) {
+  if (value === undefined || value === null || value === "") return fallback;
+
+  if (value === true || value === 1 || value === "1") return 1;
+  if (value === false || value === 0 || value === "0") return 0;
+
+  const clean = String(value).trim().toLowerCase();
+
+  if (["true", "si", "sí", "activo", "active"].includes(clean)) return 1;
+  if (["false", "no", "inactivo", "inactive"].includes(clean)) return 0;
+
+  return fallback;
+}
+
+function cleanDateTime(value) {
+  const clean = cleanString(value);
+
+  if (!clean) return null;
+
+  // datetime-local del navegador llega como YYYY-MM-DDTHH:mm.
+  return clean.replace("T", " ").slice(0, 19);
+}
+
+function validateHomeHeroSlidePayload(body = {}) {
+  const errors = [];
+  const secureUrl = cleanString(body.secure_url);
+
+  if (!secureUrl) {
+    errors.push("La URL segura de Cloudinary es obligatoria.");
+  }
+
+  if (secureUrl && !/^https:\/\/res\.cloudinary\.com\//i.test(secureUrl)) {
+    errors.push("La imagen debe venir de una URL segura de Cloudinary.");
+  }
+
+  return errors;
+}
+
+router.get("/admin/home/hero-slides", requireAdminAuth, async (req, res, next) => {
+  try {
+    const [rows] = await pool.query(
+      `
+      SELECT
+        id,
+        titulo,
+        subtitulo,
+        etiqueta,
+        texto_boton,
+        url_boton,
+        cloudinary_public_id,
+        secure_url,
+        thumbnail_url,
+        orden,
+        activo,
+        fecha_inicio,
+        fecha_fin,
+        created_at,
+        updated_at
+      FROM home_hero_slides
+      ORDER BY activo DESC, orden ASC, id ASC
+      `
+    );
+
+    res.json({
+      ok: true,
+      data: rows,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post(
+  "/admin/home/hero-slides",
+  requireAdminAuth,
+  requireRole(["ADMIN"]),
+  async (req, res, next) => {
+    try {
+      const errors = validateHomeHeroSlidePayload(req.body);
+
+      if (errors.length) {
+        return res.status(400).json({
+          ok: false,
+          error: "Datos inválidos para crear el flyer.",
+          errors,
+        });
+      }
+
+      const orden = Number.parseInt(req.body.orden, 10);
+
+      const [result] = await pool.query(
+        `
+        INSERT INTO home_hero_slides (
+          titulo,
+          subtitulo,
+          etiqueta,
+          texto_boton,
+          url_boton,
+          cloudinary_public_id,
+          secure_url,
+          thumbnail_url,
+          orden,
+          activo,
+          fecha_inicio,
+          fecha_fin
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+        [
+          cleanString(req.body.titulo),
+          cleanString(req.body.subtitulo),
+          cleanString(req.body.etiqueta),
+          cleanString(req.body.texto_boton),
+          cleanString(req.body.url_boton),
+          cleanString(req.body.cloudinary_public_id),
+          cleanString(req.body.secure_url),
+          cleanString(req.body.thumbnail_url),
+          Number.isFinite(orden) ? orden : 0,
+          parseBooleanFlag(req.body.activo, 1),
+          cleanDateTime(req.body.fecha_inicio),
+          cleanDateTime(req.body.fecha_fin),
+        ]
+      );
+
+      res.status(201).json({
+        ok: true,
+        message: "Flyer creado correctamente.",
+        data: {
+          id: result.insertId,
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.patch(
+  "/admin/home/hero-slides/:id",
+  requireAdminAuth,
+  requireRole(["ADMIN"]),
+  async (req, res, next) => {
+    try {
+      const id = Number.parseInt(req.params.id, 10);
+
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({
+          ok: false,
+          error: "ID de flyer inválido.",
+        });
+      }
+
+      const errors = validateHomeHeroSlidePayload(req.body);
+
+      if (errors.length) {
+        return res.status(400).json({
+          ok: false,
+          error: "Datos inválidos para actualizar el flyer.",
+          errors,
+        });
+      }
+
+      const orden = Number.parseInt(req.body.orden, 10);
+
+      const [result] = await pool.query(
+        `
+        UPDATE home_hero_slides
+        SET
+          titulo = ?,
+          subtitulo = ?,
+          etiqueta = ?,
+          texto_boton = ?,
+          url_boton = ?,
+          cloudinary_public_id = ?,
+          secure_url = ?,
+          thumbnail_url = ?,
+          orden = ?,
+          activo = ?,
+          fecha_inicio = ?,
+          fecha_fin = ?
+        WHERE id = ?
+        `,
+        [
+          cleanString(req.body.titulo),
+          cleanString(req.body.subtitulo),
+          cleanString(req.body.etiqueta),
+          cleanString(req.body.texto_boton),
+          cleanString(req.body.url_boton),
+          cleanString(req.body.cloudinary_public_id),
+          cleanString(req.body.secure_url),
+          cleanString(req.body.thumbnail_url),
+          Number.isFinite(orden) ? orden : 0,
+          parseBooleanFlag(req.body.activo, 1),
+          cleanDateTime(req.body.fecha_inicio),
+          cleanDateTime(req.body.fecha_fin),
+          id,
+        ]
+      );
+
+      if (result.affectedRows === 0) {
+        return res.status(404).json({
+          ok: false,
+          error: "Flyer no encontrado.",
+        });
+      }
+
+      res.json({
+        ok: true,
+        message: "Flyer actualizado correctamente.",
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.delete(
+  "/admin/home/hero-slides/:id",
+  requireAdminAuth,
+  requireRole(["ADMIN"]),
+  async (req, res, next) => {
+    try {
+      const id = Number.parseInt(req.params.id, 10);
+
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({
+          ok: false,
+          error: "ID de flyer inválido.",
+        });
+      }
+
+      const [result] = await pool.query(
+        `
+        UPDATE home_hero_slides
+        SET activo = 0
+        WHERE id = ?
+        `,
+        [id]
+      );
+
+      if (result.affectedRows === 0) {
+        return res.status(404).json({
+          ok: false,
+          error: "Flyer no encontrado.",
+        });
+      }
+
+      res.json({
+        ok: true,
+        message: "Flyer desactivado correctamente.",
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
 export default router;

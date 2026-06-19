@@ -42,6 +42,37 @@ function buildValidPublicCodeCondition(alias = "p") {
   `;
 }
 
+function buildVisibleProductCodeSql(alias = "p") {
+    const invalidValues = `
+    '#N/A',
+    'N/A',
+    'NA',
+    'ND',
+    'N.D.',
+    'SIN CODIGO',
+    'SIN CÓDIGO',
+    'NULL',
+    '0'
+  `;
+
+    return `
+    COALESCE(
+      CASE
+        WHEN ${alias}.codigo_andyfers IS NOT NULL
+          AND TRIM(${alias}.codigo_andyfers) <> ''
+          AND UPPER(TRIM(${alias}.codigo_andyfers)) NOT IN (${invalidValues})
+        THEN TRIM(${alias}.codigo_andyfers)
+      END,
+      CASE
+        WHEN ${alias}.codigo_importacion IS NOT NULL
+          AND TRIM(${alias}.codigo_importacion) <> ''
+          AND UPPER(TRIM(${alias}.codigo_importacion)) NOT IN (${invalidValues})
+        THEN TRIM(${alias}.codigo_importacion)
+      END
+    )
+  `;
+}
+
 function buildProductoMultimediaSelectSql(alias = "p") {
     return `
     (
@@ -117,6 +148,10 @@ function buildProductWhere(query) {
     if (query.armadora) {
         conditions.push("p.armadora = ?");
         params.push(query.armadora);
+    }
+
+    if (String(query.nuevo || "") === "1") {
+        conditions.push("p.nuevo_web = 1");
     }
 
     if (query.q) {
@@ -402,6 +437,7 @@ router.get("/productos/destacados", async (req, res, next) => {
         p.multiplo,
         p.unidad_medida,
         p.prioridad_ia,
+        p.nuevo_web,
         COALESCE(SUM(CASE WHEN i.disponible_web = 1 THEN i.stock ELSE 0 END), 0) AS stock_total_web,
         MIN(i.precio) AS precio_minimo,
         COUNT(DISTINCT pc.id) AS total_cruces,
@@ -423,8 +459,9 @@ router.get("/productos/destacados", async (req, res, next) => {
         p.descripcion,
         p.multiplo,
         p.unidad_medida,
-        p.prioridad_ia
-      ORDER BY p.prioridad_ia DESC, p.id ASC
+        p.prioridad_ia,
+        p.nuevo_web
+      ORDER BY p.nuevo_web DESC, p.prioridad_ia DESC, p.id DESC
       LIMIT ?
       `,
             [limit],
@@ -672,6 +709,7 @@ router.get("/productos", async (req, res, next) => {
         p.multiplo,
         p.unidad_medida,
         p.prioridad_ia,
+        p.nuevo_web,
         COALESCE(SUM(CASE WHEN i.disponible_web = 1 THEN i.stock ELSE 0 END), 0) AS stock_total_web,
         MIN(i.precio) AS precio_minimo,
         COUNT(DISTINCT pc.id) AS total_cruces,
@@ -692,8 +730,20 @@ router.get("/productos", async (req, res, next) => {
         p.descripcion,
         p.multiplo,
         p.unidad_medida,
-        p.prioridad_ia
-      ORDER BY p.prioridad_ia DESC, p.id ASC
+        p.prioridad_ia,
+        p.nuevo_web
+      ORDER BY
+        CASE
+            WHEN ${buildVisibleProductCodeSql("p")} REGEXP '^[0-9]+$' THEN 0
+            ELSE 1
+        END ASC,
+        CASE
+            WHEN ${buildVisibleProductCodeSql("p")} REGEXP '^[0-9]+$'
+            THEN CAST(${buildVisibleProductCodeSql("p")} AS UNSIGNED)
+            ELSE NULL
+        END ASC,
+        ${buildVisibleProductCodeSql("p")} ASC,
+        p.id ASC
       LIMIT ? OFFSET ?
       `,
             [...params, limit, offset],
@@ -834,6 +884,7 @@ router.get("/productos/:codigo", async (req, res, next) => {
         p.multiplo,
         p.unidad_medida,
         p.prioridad_ia,
+        p.nuevo_web,
         p.activo_web,
         p.activo,
         COALESCE(SUM(CASE WHEN i.disponible_web = 1 THEN i.stock ELSE 0 END), 0) AS stock_total_web,
@@ -862,6 +913,7 @@ router.get("/productos/:codigo", async (req, res, next) => {
         p.multiplo,
         p.unidad_medida,
         p.prioridad_ia,
+        p.nuevo_web,
         p.activo_web,
         p.activo
       LIMIT 1
