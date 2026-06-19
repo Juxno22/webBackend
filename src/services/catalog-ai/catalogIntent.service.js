@@ -151,10 +151,6 @@ const DIRECT_PRODUCT_TERMS = [
   "DEPOSITO",
   "DEPÓSITO",
   "ANTICONGELANTE",
-  "ANTICONGELANTE ORGANICO",
-  "ANTICONGELANTE ORGÁNICO",
-  "ANTICONGELANTE VERDE",
-  "ANTICONGELANTE TRADICIONAL",
   "SENSOR",
   "BULBO",
   "TOMA",
@@ -487,24 +483,6 @@ const QUERY_EXPANSION_RULES = [
     key: "LLUVIA_POSIBLE_ELECTRICO",
     patterns: [/\bLLUEVE\b/, /\bLLUVIA\b/, /\bMOJA\b/, /\bMOJADO\b/],
     tokens: ["SENSOR", "BULBO", "SENSOR TEMPERATURA"],
-  },
-  {
-    key: "ANTICONGELANTE_VARIANTES",
-    patterns: [
-      /\bANTICONGELANTE\b.*\bORGANICO\b/,
-      /\bANTICONGELANTE\b.*\bORGÁNICO\b/,
-      /\bANTICONGELANTE\b.*\bTRADICIONAL\b/,
-      /\bANTICONGELANTE\b.*\bVERDE\b/,
-      /\bORGANICO\b.*\bANTICONGELANTE\b/,
-      /\bORGÁNICO\b.*\bANTICONGELANTE\b/,
-    ],
-    tokens: [
-      "ANTICONGELANTE",
-      "ANTICONGELANTE ORGANICO",
-      "ANTICONGELANTE ORGÁNICO",
-      "ANTICONGELANTE VERDE",
-      "ANTICONGELANTE TRADICIONAL",
-    ],
   },
   {
     key: "RUIDO_HIRVIERA_AGUA",
@@ -963,6 +941,47 @@ function getExpansionTokens(question) {
   }
 
   return unique(expansions);
+}
+
+
+function extractExcludedTerms(question) {
+  const text = normalizeText(question);
+  const excluded = [];
+
+  // Exclusiones comerciales de marca de producto se manejan aparte en
+  // extractProductBrandExclusions(). Aquí solo dejamos exclusiones de
+  // aplicación vehicular para evitar que frases como
+  // "para Nissan March, pero que no sea de marca Nissan" excluyan el vehículo.
+  const productBrandExclusionLanguage =
+    /\bMARCA\b/.test(text) ||
+    /\bNO\s+ORIGINAL\b/.test(text) ||
+    /\bGENERIC[OA]\b/.test(text) ||
+    /\bGENÉRIC[OA]\b/.test(text) ||
+    /\bPREFIERO\s+(?:UNA\s+)?ALTERNATIVA\b/.test(text) ||
+    /\bALTERNATIVA\b/.test(text);
+
+  if (productBrandExclusionLanguage) {
+    return [];
+  }
+
+  for (const pattern of NEGATION_PATTERNS) {
+    let match;
+
+    while ((match = pattern.exec(text)) !== null) {
+      const value = normalizeText(match[1] || "");
+
+      if (
+        value &&
+        value.length >= 3 &&
+        !STOP_WORDS.has(value) &&
+        !INVALID_CODES.has(value)
+      ) {
+        excluded.push(value);
+      }
+    }
+  }
+
+  return unique(excluded).slice(0, 6);
 }
 
 function extractProductBrandExclusions(question) {
@@ -1999,21 +2018,6 @@ export function buildIntentGate({ question, intent }) {
   };
 }
 
-function detectCoolantPreferences(question) {
-  const text = normalizeText(question);
-
-  return {
-    organico:
-      /\bORGANICO\b/.test(text) ||
-      /\bORGÁNICO\b/.test(text) ||
-      /\bOAT\b/.test(text),
-    tradicional:
-      /\bTRADICIONAL\b/.test(text) ||
-      /\bCONVENCIONAL\b/.test(text),
-    verde: /\bVERDE\b/.test(text),
-  };
-}
-
 function detectCommercialPreferences(question) {
   const text = normalizeText(question);
 
@@ -2263,11 +2267,6 @@ const SEMANTIC_PRODUCT_MAP = {
     product: ["SENSOR", "BULBO", "SENSOR TEMPERATURA"],
     strict: ["SENSOR", "BULBO"],
   },
-  ANTICONGELANTE: {
-    direct: ["ANTICONGELANTE"],
-    product: ["ANTICONGELANTE", "ANTICONGELANTE ORGANICO", "ANTICONGELANTE VERDE", "ANTICONGELANTE TRADICIONAL"],
-    strict: ["ANTICONGELANTE"],
-  },
   "EMPAQUE DE CABEZA": {
     direct: ["EMPAQUE DE CABEZA", "JUNTA DE CABEZA", "JUNTA DE CULATA"],
     product: [
@@ -2479,27 +2478,25 @@ function classifyLocalExclusionsByScope(question, exclusions = []) {
   const text = normalizeText(question);
   const cleanExclusions = normalizeSemanticList(exclusions);
 
-  const productBrandLanguage =
+  const explicitProductBrandLanguage =
+    /\bDE\s+MARCA\b/.test(text) ||
+    /\bNO\s+MARCA\b/.test(text) ||
     /\bMARCA\s+DIFERENTE\b/.test(text) ||
     /\bOTRA\s+MARCA\b/.test(text) ||
-    /\bDISTINT[AO]\s+A\b/.test(text) ||
-    /\bFABRICAD[AO]\b/.test(text) ||
-    /\bPRODUCID[AO]\b/.test(text) ||
-    /\bPROVENGA\b/.test(text) ||
-    /\bORIGINAL\b/.test(text) ||
+    /\bPREFIERO\s+(?:UNA\s+)?ALTERNATIVA\b/.test(text) ||
+    /\bALTERNATIVA\b/.test(text) ||
+    /\bNO\s+ORIGINAL\b/.test(text) ||
+    /\bGENERIC[OA]\b/.test(text) ||
+    /\bGENÉRIC[OA]\b/.test(text) ||
     /\bOEM\b/.test(text);
 
-  const vehicleApplicationLanguage =
-    /\bPARA\b/.test(text) ||
-    /\bCOMPATIBLE\b/.test(text) ||
-    /\bLE\s+QUEDE\b/.test(text) ||
-    /\bLE\s+SIRVA\b/.test(text) ||
-    /\bAPLIQUE\b/.test(text) ||
-    /\bAPLICACION\b/.test(text) ||
-    /\bAPLICACIÓN\b/.test(text) ||
-    /\bNOT\s+FOR\b/.test(text);
+  const explicitVehicleExclusionLanguage =
+    /\bNO\s+PARA\b/.test(text) ||
+    /\bQUE\s+NO\s+SEA\s+PARA\b/.test(text) ||
+    /\bNOT\s+FOR\b/.test(text) ||
+    /\bEXCEPTO\b/.test(text);
 
-  if (productBrandLanguage && !vehicleApplicationLanguage) {
+  if (explicitProductBrandLanguage && !explicitVehicleExclusionLanguage) {
     return {
       vehicle: [],
       productBrand: cleanExclusions,
@@ -2582,7 +2579,6 @@ export async function buildIntent(question) {
     excludedTokens,
   );
   const commercialPreferences = detectCommercialPreferences(question);
-  const coolantPreferences = detectCoolantPreferences(question);
   const conditionWarnings = detectConditionWarnings(question);
   const measurementFilters = detectMeasurementFilters(question);
   const motorCandidates = extractMotorCandidates(question);
@@ -2610,7 +2606,10 @@ export async function buildIntent(question) {
     directProductTerms
   );
   const expansionTokens = getExpansionTokens(question);
-  const productBrandExclusions = extractProductBrandExclusions(question);
+  const productBrandExclusions = unique([
+    ...localExclusionScope.productBrand,
+    ...extractProductBrandExclusions(question),
+  ]);
   const productQueryTokens = buildProductQueryTokens({
     directProductTerms,
     expansionTokens: [...expansionTokens, ...positionTerms],
@@ -2655,7 +2654,8 @@ export async function buildIntent(question) {
     excluded_product_brand_tokens: productBrandExclusions,
     has_negation:
       localExclusionScope.vehicle.length > 0 ||
-      localExclusionScope.productBrand.length > 0,
+      localExclusionScope.productBrand.length > 0 ||
+      productBrandExclusions.length > 0,
     sinonimos_detectados: synonyms,
     expansiones_detectadas: expansionTokens,
     sintomas_detectados: symptomRules.map((rule) => ({
@@ -2668,9 +2668,6 @@ export async function buildIntent(question) {
     modelo_auto: vehicleForIntent?.modelo || vehicle.modelo,
     comparacion_aplicacion: crossApplicationComparison,
     preferencias_comerciales: commercialPreferences,
-    preferencias_producto: {
-      anticongelante: coolantPreferences,
-    },
     condiciones_detectadas: conditionWarnings,
     medidas_detectadas: measurementFilters,
     motores_posibles: motorCandidates,

@@ -64,16 +64,6 @@ function buildDiagnosticGuideAnswer({ intent = {}, sessionContext = {} }) {
   const symptomKeys = getSymptomKeys(intent, sessionContext);
   const level = intent.nivel_usuario || "INTERMEDIO";
 
-  if (symptomKeys.includes("NO_START") && symptomKeys.includes("COOLING_OVERHEAT")) {
-    return [
-      vehicleText
-        ? `Con ${vehicleText}, el dato clave es que se calienta después de manejar y luego se apaga o ya no prende bien.`
-        : "El dato clave es que se calienta después de manejar y luego se apaga o ya no prende bien.",
-      "No conviene asumir una sola pieza: puede relacionarse con termostato, radiador, bomba de agua, tapón, ventilador/sensor, circulación de anticongelante o aire en el sistema.",
-      "Dime solo si la temperatura sube primero y luego se apaga, o si se apaga de golpe sin marcar calentamiento. Con eso puedo orientar la siguiente validación.",
-    ].join(" ");
-  }
-
   if (symptomKeys.includes("NO_START")) {
     return [
       "Puede ser una falla eléctrica, de combustible, marcha, batería o sensores; no conviene asumir bomba de agua solo porque no arranca.",
@@ -190,14 +180,6 @@ function buildComparisonGuideAnswer({ intent = {} }) {
     return "La bomba de agua mueve el anticongelante por el motor y radiador; el termostato regula cuándo se abre el paso del anticongelante según temperatura. Si el auto se calienta, cualquiera de los dos puede estar involucrado, pero también influyen radiador, tapón, mangueras, ventilador y sensor. Para buscar la pieza correcta dime marca, modelo, año y motor.";
   }
 
-  if (hasTerm(intent, /ANTICONGELANTE/) && (/\bORGANICO\b|\bORGÁNICO\b|\bTRADICIONAL\b|\bVERDE\b/.test(normalizedQuestion))) {
-    return [
-      "El anticongelante orgánico y el tradicional verde no se deben elegir solo por color; dependen de la especificación del vehículo y del tipo de química requerida.",
-      "Si buscas comprar, puedo revisar el catálogo visible; si no aparece cargado, ventas valida existencia y tipo disponible.",
-      "No conviene mezclar tipos sin confirmar especificación del sistema.",
-    ].join(" ");
-  }
-
   if (mentionsRadiatorCap || mentionsDepositCap) {
     return "El tapón de radiador y el tapón de depósito no siempre trabajan igual: uno puede controlar presión directamente en el radiador y el otro sellar o presurizar el depósito según el sistema del vehículo. La presión correcta en PSI y la aplicación son clave. Para ubicar el correcto dime marca, modelo, año y motor, o comparte el código de la pieza.";
   }
@@ -216,6 +198,17 @@ function buildCompatibilityGuideAnswer({ intent = {}, sessionContext = {} }) {
     ].join(" ");
   }
   const vehicleText = buildVehicleText(intent, sessionContext);
+  const productText = Array.isArray(intent.terminos_producto_detectados) && intent.terminos_producto_detectados.length
+    ? intent.terminos_producto_detectados[0]
+    : "la pieza";
+
+  if (vehicleText && Array.isArray(intent.terminos_producto_detectados) && intent.terminos_producto_detectados.length) {
+    return [
+      `Para explicar por qué ${productText.toLowerCase()} podría aplicar en ${vehicleText}, se revisa la aplicación registrada en catálogo: marca, modelo, año, motor y rango de años.`,
+      "También se valida diseño físico, temperatura o especificación técnica, cruces de fabricante y código de la pieza.",
+      "No lo confirmaría solo por nombre comercial; ventas debe validar compatibilidad final antes de cotizar.",
+    ].join(" ");
+  }
 
   return [
     "Para explicar compatibilidad necesito cruzar la pieza contra aplicaciones, motor, años y posibles cruces registrados en el catálogo.",

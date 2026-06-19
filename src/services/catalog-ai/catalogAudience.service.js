@@ -52,10 +52,6 @@ const BEGINNER_PATTERNS = [
   /\bNO\s+S[EÉ]\b/,
   /\bNO\s+S[EÉ]\s+C[ÓO]MO\b/,
   /\bNO\s+TENGO\s+IDEA\b/,
-  /\bNO\s+S[EÉ]\s+NADA\b/,
-  /\bNO\s+S[EÉ]\s+NADA\s+DE\s+(CARROS|COCHES|AUTOS|VEH[IÍ]CULOS)\b/,
-  /\bMEC[AÁ]NICO\s+ME\s+DIJO\b/,
-  /\bEL\s+MEC[AÁ]NICO\s+ME\s+DIJO\b/,
   /\bNO\s+S[EÉ]\s+QU[EÉ]\s+PIEZA\b/,
   /\bNO\s+S[EÉ]\s+QU[EÉ]\s+LLEVA\b/,
   /\bMI\s+(CARRO|COCHE|AUTO|VEH[IÍ]CULO)\b/,
@@ -146,20 +142,9 @@ export function detectAudienceLevel({ question, intent = {} } = {}) {
     (hasMeasurements ? 2 : 0) +
     (hasMotor ? 1 : 0);
 
-  const explicitBeginnerLanguage =
-    /\bNO\s+S[EÉ]\s+NADA\b/.test(text) ||
-    /\bNO\s+TENGO\s+IDEA\b/.test(text) ||
-    /\bMEC[AÁ]NICO\s+ME\s+DIJO\b/.test(text) ||
-    /\bEL\s+MEC[AÁ]NICO\s+ME\s+DIJO\b/.test(text);
-
   // Regla fuerte: si el cliente claramente no sabe qué pieza lleva,
   // no lo clasifiques como mecánico por tokens accidentales.
-  if (
-    (explicitBeginnerLanguage || beginnerScore >= 3) &&
-    !strongMechanicLanguage &&
-    !hasMeasurements &&
-    !meaningfulPartTokens.length
-  ) {
+  if (beginnerScore >= 3 && !strongMechanicLanguage && !hasMeasurements && !meaningfulPartTokens.length) {
     return {
       nivel_usuario: "PRINCIPIANTE",
       tono_respuesta: "SIMPLE_GUIADO",

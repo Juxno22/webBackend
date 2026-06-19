@@ -234,25 +234,6 @@ function buildDiagnosticFollowup({ intent = {} } = {}) {
     const missingVehicle = compactMissingVehicle(missingVehicleFields);
     const vehicleQuestions = buildVehicleMissingQuestions(intent, missingVehicleFields);
 
-    if (hasNoStart && hasOverheat && (intent.marca_auto || intent.modelo_auto || intent.anio)) {
-        return makeFollowup({
-            requiereSeguimiento: true,
-            bloqueante: false,
-            siguienteAccion: "ASK_OVERHEAT_SHUTOFF_SEQUENCE",
-            datosFaltantes: ["secuencia_falla"],
-            preguntas: [
-                "¿Primero sube la temperatura y luego se apaga, o se apaga de golpe sin marcar calentamiento?",
-            ],
-            respuestasRapidas: [
-                "Primero sube temperatura",
-                "Se apaga de golpe",
-                "Solo pasa en carretera",
-                "No sé",
-            ],
-            maxPreguntas: 1,
-        });
-    }
-
     if (
         hasLeak &&
         (intent.marca_auto || intent.modelo_auto || intent.anio)
@@ -426,7 +407,7 @@ function buildProductSearchFollowup({ intent = {}, products = [] } = {}) {
     }
 
     const missingVehicleFields = buildMissingVehicleFields(intent, {
-        includeMotor: intent.nivel_usuario === "MECANICO",
+        includeMotor: intent.nivel_usuario === "MECANICO" || "INTERMEDIO",
     });
 
     const missingVehicle = compactMissingVehicle(missingVehicleFields);
@@ -462,7 +443,7 @@ function buildProductSearchFollowup({ intent = {}, products = [] } = {}) {
 
 function buildCompatibilityFollowup({ intent = {}, products = [] } = {}) {
     const missingVehicleFields = buildMissingVehicleFields(intent, {
-        includeMotor: intent.nivel_usuario === "MECANICO",
+        includeMotor: intent.nivel_usuario === "MECANICO" || "INTERMEDIO",
     });
     const missingVehicle = compactMissingVehicle(missingVehicleFields);
     const missing = [...missingVehicle];

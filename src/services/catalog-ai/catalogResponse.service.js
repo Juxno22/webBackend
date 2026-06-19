@@ -80,34 +80,6 @@ function requestedRadiator(intent = {}) {
   return hasIntentTerm(intent, /\bRADIADOR\b/);
 }
 
-function requestedTensionerPulley(intent = {}) {
-  const text = normalizeCatalogText(
-    [
-      intent.pregunta_normalizada,
-      ...(intent.terminos_producto_detectados || []),
-      ...(intent.product_query_tokens || []),
-      ...(intent.strict_product_family_tokens || []),
-    ].join(" ")
-  );
-
-  return /POLEA/.test(text) && /TENSORA/.test(text);
-}
-
-function requestedCoolant(intent = {}) {
-  return hasIntentTerm(intent, /ANTICONGELANTE/);
-}
-
-function buildCoolantPreferenceText(intent = {}) {
-  const prefs = intent.preferencias_producto?.anticongelante || {};
-  const parts = [];
-
-  if (prefs.organico) parts.push("orgánico");
-  if (prefs.tradicional) parts.push("tradicional");
-  if (prefs.verde) parts.push("verde");
-
-  return parts.length ? `Tomé en cuenta que preguntas por anticongelante ${parts.join(" / ")}.` : "";
-}
-
 function buildApproxYearText(intent = {}) {
   if (
     !intent.anio_aproximado ||
@@ -122,26 +94,6 @@ function buildApproxYearText(intent = {}) {
 
 function buildNoResultsAnswer(intent) {
   const vehicleText = buildVehicleText(intent);
-
-  if (requestedTensionerPulley(intent)) {
-    return [
-      vehicleText
-        ? `Detecté que buscas polea tensora para ${vehicleText}.`
-        : "Detecté que buscas una polea tensora.",
-      "No encontré una coincidencia exacta visible en catálogo con esos datos.",
-      "Para validarla mejor, ventas puede revisar foto, muestra física, código de la polea o sistema de banda.",
-    ].join(" ");
-  }
-
-  if (requestedCoolant(intent)) {
-    const preferenceText = buildCoolantPreferenceText(intent);
-
-    return [
-      "No encontré anticongelantes cargados o coincidencias visibles en catálogo con los datos escritos.",
-      preferenceText || "Detecté que preguntas por anticongelante.",
-      "Ventas puede confirmar si se maneja orgánico, tradicional verde u otra especificación disponible.",
-    ].join(" ");
-  }
 
   if (requestedRadiator(intent)) {
     return [
@@ -265,19 +217,6 @@ export function buildLocalAnswer({ intent, products }) {
       intent.excluded_product_brand_tokens.length
       ? "Tomé en cuenta que buscas una alternativa o una opción no original. La marca/fabricante final de la pieza debe validarla ventas."
       : "";
-
-  if (requestedCoolant(intent)) {
-    const preferenceText = buildCoolantPreferenceText(intent);
-
-    return [
-      `Encontré ${products.length} opción(es) relacionadas con anticongelante en el catálogo Andyfers.`,
-      `La opción más fuerte es ${top.codigo_andyfers || top.codigo_importacion}: ${top.descripcion}.`,
-      preferenceText,
-      "El tipo correcto no debe elegirse solo por color; ventas valida especificación, compatibilidad y disponibilidad final.",
-    ]
-      .filter(Boolean)
-      .join(" ");
-  }
 
   if (intent.modo_busqueda === "EXPLORATORY") {
     const exclusionText =
