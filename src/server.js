@@ -9,6 +9,7 @@ import catalogoRoutes from './routes/catalog.routes.js'
 import quoteRoutes from './routes/quotes.routes.js'
 import adminRoutes from "./routes/admin.routes.js";
 import homeRoutes from "./routes/home.routes.js";
+import siteRoutes from "./routes/site.routes.js";
 import aiRoutes from './routes/ai.routes.js';
 
 const app = express();
@@ -50,6 +51,7 @@ app.use("/api", quoteRoutes);
 app.use("/api", homeRoutes);
 app.use("/api", adminRoutes);
 app.use("/api", aiRoutes);
+app.use("/api", siteRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
