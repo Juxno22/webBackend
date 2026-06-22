@@ -3243,4 +3243,1450 @@ router.patch("/admin/productos/:id/acciones-rapidas",
   }
 );
 
+//Upload
+
+function siteSafeCloudinarySegment(value, fallback = "item") {
+  const clean = String(value || fallback)
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9_-]/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 80);
+
+  return clean || fallback;
+}
+
+function buildSiteMediaPublicId({ target, key, fileName }) {
+  const safeTarget = siteSafeCloudinarySegment(target, "contenido");
+  const safeKey = siteSafeCloudinarySegment(key, "sin_clave");
+
+  const safeFile = siteSafeCloudinarySegment(
+    String(fileName || "imagen").replace(/\.[^.]+$/, ""),
+    "imagen"
+  );
+
+  return `andyfers/contenido/${safeTarget}/${safeKey}/${Date.now()}_${safeFile}`;
+}
+
+router.post("/admin/site/media/upload",
+  requireAdminAuth,
+  requireRole(["ADMIN"]),
+  upload.single("file"),
+  async (req, res, next) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({
+          ok: false,
+          error: "La imagen es obligatoria.",
+        });
+      }
+
+      const target = cleanString(req.body.target) || "contenido";
+      const key = cleanString(req.body.key) || "sin_clave";
+      const field = cleanString(req.body.field) || "media_url";
+
+      const publicId = buildSiteMediaPublicId({
+        target,
+        key,
+        fileName: req.file.originalname,
+      });
+
+      const uploadResponse = await uploadBufferToCloudinary(req.file.buffer, {
+        public_id: publicId,
+        resource_type: "image",
+        overwrite: false,
+        unique_filename: false,
+        folder: undefined,
+        tags: [
+          "andyfers",
+          "contenido",
+          siteSafeCloudinarySegment(target, "contenido"),
+          siteSafeCloudinarySegment(field, "media"),
+        ],
+      });
+
+      const secureUrl = uploadResponse.secure_url;
+      const thumbnailUrl = buildThumbnailUrl(secureUrl);
+
+      res.status(201).json({
+        ok: true,
+        message: "Imagen subida correctamente.",
+        data: {
+          cloudinary_public_id: uploadResponse.public_id,
+          secure_url: secureUrl,
+          thumbnail_url: thumbnailUrl,
+          field,
+          target,
+          key,
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/* ADMIN CONTENIDO EDITABLE */
+
+function siteParseNullableInt(value) {
+  if (value === undefined || value === null || value === "") return null;
+
+  const parsed = Number.parseInt(value, 10);
+
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function siteParseOrder(value, fallback = 0) {
+  const parsed = Number.parseInt(value, 10);
+
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function siteParseLimit(value, fallback = 8) {
+  const parsed = Number.parseInt(value, 10);
+
+  if (!Number.isFinite(parsed) || parsed < 1) return fallback;
+
+  return Math.min(parsed, 60);
+}
+
+function siteJsonToDb(value) {
+  if (value === undefined || value === null || value === "") return null;
+
+  if (typeof value === "object") {
+    return JSON.stringify(value);
+  }
+
+  const clean = String(value).trim();
+
+  if (!clean) return null;
+
+  try {
+    JSON.parse(clean);
+    return clean;
+  } catch {
+    return JSON.stringify({
+      raw: clean,
+    });
+  }
+}
+
+function siteParseJsonSafe(value, fallback = {}) {
+  if (!value) return fallback;
+
+  if (typeof value === "object") return value;
+
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+
+function siteCleanRow(row) {
+  const next = {
+    ...row,
+    metadata: siteParseJsonSafe(row.metadata_json, {}),
+  };
+
+  delete next.metadata_json;
+
+  return next;
+}
+
+function siteHasOwn(body, field) {
+  return Object.prototype.hasOwnProperty.call(body, field);
+}
+
+function sitePushUpdate(updates, params, body, field, column = field, transform = cleanString) {
+  if (!siteHasOwn(body, field)) return;
+
+  updates.push(`${column} = ?`);
+  params.push(transform(body[field]));
+}
+
+function siteBuildSimpleWhere(query = {}, config = {}) {
+  const conditions = [];
+  const params = [];
+
+  const q = cleanString(query.q);
+  const pagina = cleanString(query.pagina);
+  const bloque = cleanString(query.bloque);
+  const tipo = cleanString(query.tipo);
+  const posicion = cleanString(query.posicion);
+  const activo = parseBooleanFlag(query.activo, null);
+
+  if (activo !== null) {
+    conditions.push("activo = ?");
+    params.push(activo);
+  }
+
+  if (pagina && config.pagina) {
+    conditions.push(`${config.pagina} = ?`);
+    params.push(pagina.toUpperCase());
+  }
+
+  if (bloque && config.bloque) {
+    conditions.push(`${config.bloque} = ?`);
+    params.push(bloque.toUpperCase());
+  }
+
+  if (tipo && config.tipo) {
+    conditions.push(`${config.tipo} = ?`);
+    params.push(tipo.toUpperCase());
+  }
+
+  if (posicion && config.posicion) {
+    conditions.push(`${config.posicion} = ?`);
+    params.push(posicion.toUpperCase());
+  }
+
+  if (q && Array.isArray(config.qColumns) && config.qColumns.length) {
+    const like = `%${q}%`;
+
+    conditions.push(
+      `(${config.qColumns.map((column) => `${column} LIKE ?`).join(" OR ")})`
+    );
+
+    config.qColumns.forEach(() => params.push(like));
+  }
+
+  return {
+    whereSql: conditions.length ? `WHERE ${conditions.join(" AND ")}` : "",
+    params,
+  };
+}
+
+/* CONTENT BLOCKS */
+
+router.get("/admin/site/content-blocks", requireAdminAuth, async (req, res, next) => {
+  try {
+    const { whereSql, params } = siteBuildSimpleWhere(req.query, {
+      pagina: "pagina",
+      bloque: "bloque",
+      tipo: "tipo",
+      qColumns: [
+        "content_key",
+        "pagina",
+        "bloque",
+        "etiqueta",
+        "titulo",
+        "subtitulo",
+        "contenido",
+      ],
+    });
+
+    const [rows] = await pool.query(
+      `
+      SELECT
+        id,
+        content_key,
+        pagina,
+        bloque,
+        tipo,
+        etiqueta,
+        titulo,
+        subtitulo,
+        contenido,
+        cta_texto,
+        cta_url,
+        media_tipo,
+        media_url,
+        media_public_id,
+        metadata_json,
+        orden,
+        activo,
+        created_at,
+        updated_at
+      FROM site_content_blocks
+      ${whereSql}
+      ORDER BY pagina ASC, bloque ASC, orden ASC, id ASC
+      `,
+      params
+    );
+
+    res.json({
+      ok: true,
+      data: rows.map(siteCleanRow),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/admin/site/content-blocks",
+  requireAdminAuth,
+  requireRole(["ADMIN"]),
+  async (req, res, next) => {
+    try {
+      const contentKey = cleanString(req.body.content_key);
+
+      if (!contentKey) {
+        return res.status(400).json({
+          ok: false,
+          error: "content_key es obligatorio.",
+        });
+      }
+
+      const [result] = await pool.query(
+        `
+        INSERT INTO site_content_blocks (
+          content_key,
+          pagina,
+          bloque,
+          tipo,
+          etiqueta,
+          titulo,
+          subtitulo,
+          contenido,
+          cta_texto,
+          cta_url,
+          media_tipo,
+          media_url,
+          media_public_id,
+          metadata_json,
+          orden,
+          activo
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+        [
+          contentKey,
+          cleanString(req.body.pagina) || "GLOBAL",
+          cleanString(req.body.bloque) || "GENERAL",
+          cleanString(req.body.tipo) || "TEXTO",
+          cleanString(req.body.etiqueta),
+          cleanString(req.body.titulo),
+          cleanString(req.body.subtitulo),
+          cleanString(req.body.contenido),
+          cleanString(req.body.cta_texto),
+          cleanString(req.body.cta_url),
+          cleanString(req.body.media_tipo),
+          cleanString(req.body.media_url),
+          cleanString(req.body.media_public_id),
+          siteJsonToDb(req.body.metadata || req.body.metadata_json),
+          siteParseOrder(req.body.orden, 0),
+          parseBooleanFlag(req.body.activo, 1),
+        ]
+      );
+
+      res.status(201).json({
+        ok: true,
+        message: "Bloque de contenido creado correctamente.",
+        data: {
+          id: result.insertId,
+        },
+      });
+    } catch (error) {
+      if (error?.code === "ER_DUP_ENTRY") {
+        return res.status(409).json({
+          ok: false,
+          error: "Ya existe un bloque con ese content_key.",
+        });
+      }
+
+      next(error);
+    }
+  }
+);
+
+router.patch("/admin/site/content-blocks/:id",
+  requireAdminAuth,
+  requireRole(["ADMIN"]),
+  async (req, res, next) => {
+    try {
+      const id = Number.parseInt(req.params.id, 10);
+
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({
+          ok: false,
+          error: "ID inválido.",
+        });
+      }
+
+      const updates = [];
+      const params = [];
+
+      sitePushUpdate(updates, params, req.body, "content_key");
+      sitePushUpdate(updates, params, req.body, "pagina");
+      sitePushUpdate(updates, params, req.body, "bloque");
+      sitePushUpdate(updates, params, req.body, "tipo");
+      sitePushUpdate(updates, params, req.body, "etiqueta");
+      sitePushUpdate(updates, params, req.body, "titulo");
+      sitePushUpdate(updates, params, req.body, "subtitulo");
+      sitePushUpdate(updates, params, req.body, "contenido");
+      sitePushUpdate(updates, params, req.body, "cta_texto");
+      sitePushUpdate(updates, params, req.body, "cta_url");
+      sitePushUpdate(updates, params, req.body, "media_tipo");
+      sitePushUpdate(updates, params, req.body, "media_url");
+      sitePushUpdate(updates, params, req.body, "media_public_id");
+
+      if (siteHasOwn(req.body, "metadata") || siteHasOwn(req.body, "metadata_json")) {
+        updates.push("metadata_json = ?");
+        params.push(siteJsonToDb(req.body.metadata || req.body.metadata_json));
+      }
+
+      if (siteHasOwn(req.body, "orden")) {
+        updates.push("orden = ?");
+        params.push(siteParseOrder(req.body.orden, 0));
+      }
+
+      if (siteHasOwn(req.body, "activo")) {
+        updates.push("activo = ?");
+        params.push(parseBooleanFlag(req.body.activo, 1));
+      }
+
+      if (!updates.length) {
+        return res.status(400).json({
+          ok: false,
+          error: "No hay cambios válidos.",
+        });
+      }
+
+      params.push(id);
+
+      const [result] = await pool.query(
+        `
+        UPDATE site_content_blocks
+        SET
+          ${updates.join(", ")},
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        `,
+        params
+      );
+
+      if (result.affectedRows === 0) {
+        return res.status(404).json({
+          ok: false,
+          error: "Bloque no encontrado.",
+        });
+      }
+
+      res.json({
+        ok: true,
+        message: "Bloque de contenido actualizado correctamente.",
+      });
+    } catch (error) {
+      if (error?.code === "ER_DUP_ENTRY") {
+        return res.status(409).json({
+          ok: false,
+          error: "Ya existe un bloque con ese content_key.",
+        });
+      }
+
+      next(error);
+    }
+  }
+);
+
+router.delete("/admin/site/content-blocks/:id",
+  requireAdminAuth,
+  requireRole(["ADMIN"]),
+  async (req, res, next) => {
+    try {
+      const id = Number.parseInt(req.params.id, 10);
+
+      const [result] = await pool.query(
+        `
+        UPDATE site_content_blocks
+        SET activo = 0, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        `,
+        [id]
+      );
+
+      if (result.affectedRows === 0) {
+        return res.status(404).json({
+          ok: false,
+          error: "Bloque no encontrado.",
+        });
+      }
+
+      res.json({
+        ok: true,
+        message: "Bloque desactivado correctamente.",
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/* BANNERS */
+
+router.get("/admin/site/banners", requireAdminAuth, async (req, res, next) => {
+  try {
+    const { whereSql, params } = siteBuildSimpleWhere(req.query, {
+      pagina: "pagina",
+      posicion: "posicion",
+      qColumns: [
+        "banner_key",
+        "pagina",
+        "posicion",
+        "titulo",
+        "subtitulo",
+        "descripcion",
+      ],
+    });
+
+    const [rows] = await pool.query(
+      `
+      SELECT
+        id,
+        banner_key,
+        pagina,
+        posicion,
+        titulo,
+        subtitulo,
+        descripcion,
+        texto_boton,
+        url_boton,
+        media_tipo,
+        media_url,
+        thumbnail_url,
+        cloudinary_public_id,
+        color_fondo,
+        color_texto,
+        fecha_inicio,
+        fecha_fin,
+        orden,
+        activo,
+        created_at,
+        updated_at
+      FROM site_banners
+      ${whereSql}
+      ORDER BY pagina ASC, posicion ASC, orden ASC, id ASC
+      `,
+      params
+    );
+
+    res.json({
+      ok: true,
+      data: rows,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/admin/site/banners",
+  requireAdminAuth,
+  requireRole(["ADMIN"]),
+  async (req, res, next) => {
+    try {
+      const bannerKey = cleanString(req.body.banner_key);
+
+      if (!bannerKey) {
+        return res.status(400).json({
+          ok: false,
+          error: "banner_key es obligatorio.",
+        });
+      }
+
+      const [result] = await pool.query(
+        `
+        INSERT INTO site_banners (
+          banner_key,
+          pagina,
+          posicion,
+          titulo,
+          subtitulo,
+          descripcion,
+          texto_boton,
+          url_boton,
+          media_tipo,
+          media_url,
+          thumbnail_url,
+          cloudinary_public_id,
+          color_fondo,
+          color_texto,
+          fecha_inicio,
+          fecha_fin,
+          orden,
+          activo
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+        [
+          bannerKey,
+          cleanString(req.body.pagina) || "GLOBAL",
+          cleanString(req.body.posicion) || "GENERAL",
+          cleanString(req.body.titulo),
+          cleanString(req.body.subtitulo),
+          cleanString(req.body.descripcion),
+          cleanString(req.body.texto_boton),
+          cleanString(req.body.url_boton),
+          cleanString(req.body.media_tipo) || "IMAGEN",
+          cleanString(req.body.media_url),
+          cleanString(req.body.thumbnail_url),
+          cleanString(req.body.cloudinary_public_id),
+          cleanString(req.body.color_fondo),
+          cleanString(req.body.color_texto),
+          cleanDateTime(req.body.fecha_inicio),
+          cleanDateTime(req.body.fecha_fin),
+          siteParseOrder(req.body.orden, 0),
+          parseBooleanFlag(req.body.activo, 1),
+        ]
+      );
+
+      res.status(201).json({
+        ok: true,
+        message: "Banner creado correctamente.",
+        data: {
+          id: result.insertId,
+        },
+      });
+    } catch (error) {
+      if (error?.code === "ER_DUP_ENTRY") {
+        return res.status(409).json({
+          ok: false,
+          error: "Ya existe un banner con ese banner_key.",
+        });
+      }
+
+      next(error);
+    }
+  }
+);
+
+router.patch("/admin/site/banners/:id",
+  requireAdminAuth,
+  requireRole(["ADMIN"]),
+  async (req, res, next) => {
+    try {
+      const id = Number.parseInt(req.params.id, 10);
+
+      const updates = [];
+      const params = [];
+
+      sitePushUpdate(updates, params, req.body, "banner_key");
+      sitePushUpdate(updates, params, req.body, "pagina");
+      sitePushUpdate(updates, params, req.body, "posicion");
+      sitePushUpdate(updates, params, req.body, "titulo");
+      sitePushUpdate(updates, params, req.body, "subtitulo");
+      sitePushUpdate(updates, params, req.body, "descripcion");
+      sitePushUpdate(updates, params, req.body, "texto_boton");
+      sitePushUpdate(updates, params, req.body, "url_boton");
+      sitePushUpdate(updates, params, req.body, "media_tipo");
+      sitePushUpdate(updates, params, req.body, "media_url");
+      sitePushUpdate(updates, params, req.body, "thumbnail_url");
+      sitePushUpdate(updates, params, req.body, "cloudinary_public_id");
+      sitePushUpdate(updates, params, req.body, "color_fondo");
+      sitePushUpdate(updates, params, req.body, "color_texto");
+
+      if (siteHasOwn(req.body, "fecha_inicio")) {
+        updates.push("fecha_inicio = ?");
+        params.push(cleanDateTime(req.body.fecha_inicio));
+      }
+
+      if (siteHasOwn(req.body, "fecha_fin")) {
+        updates.push("fecha_fin = ?");
+        params.push(cleanDateTime(req.body.fecha_fin));
+      }
+
+      if (siteHasOwn(req.body, "orden")) {
+        updates.push("orden = ?");
+        params.push(siteParseOrder(req.body.orden, 0));
+      }
+
+      if (siteHasOwn(req.body, "activo")) {
+        updates.push("activo = ?");
+        params.push(parseBooleanFlag(req.body.activo, 1));
+      }
+
+      if (!updates.length) {
+        return res.status(400).json({
+          ok: false,
+          error: "No hay cambios válidos.",
+        });
+      }
+
+      params.push(id);
+
+      const [result] = await pool.query(
+        `
+        UPDATE site_banners
+        SET
+          ${updates.join(", ")},
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        `,
+        params
+      );
+
+      if (result.affectedRows === 0) {
+        return res.status(404).json({
+          ok: false,
+          error: "Banner no encontrado.",
+        });
+      }
+
+      res.json({
+        ok: true,
+        message: "Banner actualizado correctamente.",
+      });
+    } catch (error) {
+      if (error?.code === "ER_DUP_ENTRY") {
+        return res.status(409).json({
+          ok: false,
+          error: "Ya existe un banner con ese banner_key.",
+        });
+      }
+
+      next(error);
+    }
+  }
+);
+
+router.delete("/admin/site/banners/:id",
+  requireAdminAuth,
+  requireRole(["ADMIN"]),
+  async (req, res, next) => {
+    try {
+      const id = Number.parseInt(req.params.id, 10);
+
+      const [result] = await pool.query(
+        `
+        UPDATE site_banners
+        SET activo = 0, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        `,
+        [id]
+      );
+
+      if (result.affectedRows === 0) {
+        return res.status(404).json({
+          ok: false,
+          error: "Banner no encontrado.",
+        });
+      }
+
+      res.json({
+        ok: true,
+        message: "Banner desactivado correctamente.",
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/* LINEAS COMERCIALES */
+
+router.get("/admin/site/lineas-comerciales", requireAdminAuth, async (req, res, next) => {
+  try {
+    const { whereSql, params } = siteBuildSimpleWhere(req.query, {
+      qColumns: [
+        "line_key",
+        "nombre",
+        "slug",
+        "descripcion_corta",
+        "descripcion_larga",
+      ],
+    });
+
+    const [rows] = await pool.query(
+      `
+      SELECT
+        id,
+        line_key,
+        nombre,
+        slug,
+        descripcion_corta,
+        descripcion_larga,
+        icono,
+        color,
+        imagen_url,
+        thumbnail_url,
+        cloudinary_public_id,
+        url_destino,
+        visible_home,
+        orden,
+        activo,
+        created_at,
+        updated_at
+      FROM site_commercial_lines
+      ${whereSql}
+      ORDER BY activo DESC, orden ASC, id ASC
+      `,
+      params
+    );
+
+    res.json({
+      ok: true,
+      data: rows,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/admin/site/lineas-comerciales",
+  requireAdminAuth,
+  requireRole(["ADMIN"]),
+  async (req, res, next) => {
+    try {
+      const lineKey = cleanString(req.body.line_key);
+      const nombre = cleanString(req.body.nombre);
+
+      if (!lineKey || !nombre) {
+        return res.status(400).json({
+          ok: false,
+          error: "line_key y nombre son obligatorios.",
+        });
+      }
+
+      const [result] = await pool.query(
+        `
+        INSERT INTO site_commercial_lines (
+          line_key,
+          nombre,
+          slug,
+          descripcion_corta,
+          descripcion_larga,
+          icono,
+          color,
+          imagen_url,
+          thumbnail_url,
+          cloudinary_public_id,
+          url_destino,
+          visible_home,
+          orden,
+          activo
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+        [
+          lineKey,
+          nombre,
+          cleanString(req.body.slug),
+          cleanString(req.body.descripcion_corta),
+          cleanString(req.body.descripcion_larga),
+          cleanString(req.body.icono),
+          cleanString(req.body.color),
+          cleanString(req.body.imagen_url),
+          cleanString(req.body.thumbnail_url),
+          cleanString(req.body.cloudinary_public_id),
+          cleanString(req.body.url_destino),
+          parseBooleanFlag(req.body.visible_home, 1),
+          siteParseOrder(req.body.orden, 0),
+          parseBooleanFlag(req.body.activo, 1),
+        ]
+      );
+
+      res.status(201).json({
+        ok: true,
+        message: "Línea comercial creada correctamente.",
+        data: {
+          id: result.insertId,
+        },
+      });
+    } catch (error) {
+      if (error?.code === "ER_DUP_ENTRY") {
+        return res.status(409).json({
+          ok: false,
+          error: "Ya existe una línea comercial con esa clave o slug.",
+        });
+      }
+
+      next(error);
+    }
+  }
+);
+
+router.patch("/admin/site/lineas-comerciales/:id",
+  requireAdminAuth,
+  requireRole(["ADMIN"]),
+  async (req, res, next) => {
+    try {
+      const id = Number.parseInt(req.params.id, 10);
+
+      const updates = [];
+      const params = [];
+
+      sitePushUpdate(updates, params, req.body, "line_key");
+      sitePushUpdate(updates, params, req.body, "nombre");
+      sitePushUpdate(updates, params, req.body, "slug");
+      sitePushUpdate(updates, params, req.body, "descripcion_corta");
+      sitePushUpdate(updates, params, req.body, "descripcion_larga");
+      sitePushUpdate(updates, params, req.body, "icono");
+      sitePushUpdate(updates, params, req.body, "color");
+      sitePushUpdate(updates, params, req.body, "imagen_url");
+      sitePushUpdate(updates, params, req.body, "thumbnail_url");
+      sitePushUpdate(updates, params, req.body, "cloudinary_public_id");
+      sitePushUpdate(updates, params, req.body, "url_destino");
+
+      if (siteHasOwn(req.body, "visible_home")) {
+        updates.push("visible_home = ?");
+        params.push(parseBooleanFlag(req.body.visible_home, 1));
+      }
+
+      if (siteHasOwn(req.body, "orden")) {
+        updates.push("orden = ?");
+        params.push(siteParseOrder(req.body.orden, 0));
+      }
+
+      if (siteHasOwn(req.body, "activo")) {
+        updates.push("activo = ?");
+        params.push(parseBooleanFlag(req.body.activo, 1));
+      }
+
+      if (!updates.length) {
+        return res.status(400).json({
+          ok: false,
+          error: "No hay cambios válidos.",
+        });
+      }
+
+      params.push(id);
+
+      const [result] = await pool.query(
+        `
+        UPDATE site_commercial_lines
+        SET
+          ${updates.join(", ")},
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        `,
+        params
+      );
+
+      if (result.affectedRows === 0) {
+        return res.status(404).json({
+          ok: false,
+          error: "Línea comercial no encontrada.",
+        });
+      }
+
+      res.json({
+        ok: true,
+        message: "Línea comercial actualizada correctamente.",
+      });
+    } catch (error) {
+      if (error?.code === "ER_DUP_ENTRY") {
+        return res.status(409).json({
+          ok: false,
+          error: "Ya existe una línea comercial con esa clave o slug.",
+        });
+      }
+
+      next(error);
+    }
+  }
+);
+
+router.delete("/admin/site/lineas-comerciales/:id",
+  requireAdminAuth,
+  requireRole(["ADMIN"]),
+  async (req, res, next) => {
+    try {
+      const id = Number.parseInt(req.params.id, 10);
+
+      const [result] = await pool.query(
+        `
+        UPDATE site_commercial_lines
+        SET activo = 0, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        `,
+        [id]
+      );
+
+      if (result.affectedRows === 0) {
+        return res.status(404).json({
+          ok: false,
+          error: "Línea comercial no encontrada.",
+        });
+      }
+
+      res.json({
+        ok: true,
+        message: "Línea comercial desactivada correctamente.",
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/* SECCIONES DESTACADAS */
+
+router.get("/admin/site/secciones-destacadas", requireAdminAuth, async (req, res, next) => {
+  try {
+    const { whereSql, params } = siteBuildSimpleWhere(req.query, {
+      pagina: "pagina",
+      qColumns: [
+        "section_key",
+        "pagina",
+        "titulo",
+        "subtitulo",
+        "descripcion",
+        "layout",
+        "source_type",
+        "filtro_familia",
+      ],
+    });
+
+    const [rows] = await pool.query(
+      `
+      SELECT
+        id,
+        section_key,
+        pagina,
+        titulo,
+        subtitulo,
+        descripcion,
+        layout,
+        source_type,
+        filtro_familia,
+        filtro_categoria_id,
+        limite_productos,
+        cta_texto,
+        cta_url,
+        metadata_json,
+        orden,
+        activo,
+        created_at,
+        updated_at
+      FROM site_featured_sections
+      ${whereSql}
+      ORDER BY pagina ASC, orden ASC, id ASC
+      `,
+      params
+    );
+
+    res.json({
+      ok: true,
+      data: rows.map(siteCleanRow),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/admin/site/secciones-destacadas",
+  requireAdminAuth,
+  requireRole(["ADMIN"]),
+  async (req, res, next) => {
+    try {
+      const sectionKey = cleanString(req.body.section_key);
+      const titulo = cleanString(req.body.titulo);
+
+      if (!sectionKey || !titulo) {
+        return res.status(400).json({
+          ok: false,
+          error: "section_key y titulo son obligatorios.",
+        });
+      }
+
+      const [result] = await pool.query(
+        `
+        INSERT INTO site_featured_sections (
+          section_key,
+          pagina,
+          titulo,
+          subtitulo,
+          descripcion,
+          layout,
+          source_type,
+          filtro_familia,
+          filtro_categoria_id,
+          limite_productos,
+          cta_texto,
+          cta_url,
+          metadata_json,
+          orden,
+          activo
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+        [
+          sectionKey,
+          cleanString(req.body.pagina) || "HOME",
+          titulo,
+          cleanString(req.body.subtitulo),
+          cleanString(req.body.descripcion),
+          cleanString(req.body.layout) || "GRID",
+          cleanString(req.body.source_type) || "MANUAL",
+          cleanString(req.body.filtro_familia),
+          siteParseNullableInt(req.body.filtro_categoria_id),
+          siteParseLimit(req.body.limite_productos, 8),
+          cleanString(req.body.cta_texto),
+          cleanString(req.body.cta_url),
+          siteJsonToDb(req.body.metadata || req.body.metadata_json),
+          siteParseOrder(req.body.orden, 0),
+          parseBooleanFlag(req.body.activo, 1),
+        ]
+      );
+
+      res.status(201).json({
+        ok: true,
+        message: "Sección destacada creada correctamente.",
+        data: {
+          id: result.insertId,
+        },
+      });
+    } catch (error) {
+      if (error?.code === "ER_DUP_ENTRY") {
+        return res.status(409).json({
+          ok: false,
+          error: "Ya existe una sección con ese section_key.",
+        });
+      }
+
+      next(error);
+    }
+  }
+);
+
+router.patch("/admin/site/secciones-destacadas/:id",
+  requireAdminAuth,
+  requireRole(["ADMIN"]),
+  async (req, res, next) => {
+    try {
+      const id = Number.parseInt(req.params.id, 10);
+
+      const updates = [];
+      const params = [];
+
+      sitePushUpdate(updates, params, req.body, "section_key");
+      sitePushUpdate(updates, params, req.body, "pagina");
+      sitePushUpdate(updates, params, req.body, "titulo");
+      sitePushUpdate(updates, params, req.body, "subtitulo");
+      sitePushUpdate(updates, params, req.body, "descripcion");
+      sitePushUpdate(updates, params, req.body, "layout");
+      sitePushUpdate(updates, params, req.body, "source_type");
+      sitePushUpdate(updates, params, req.body, "filtro_familia");
+      sitePushUpdate(updates, params, req.body, "cta_texto");
+      sitePushUpdate(updates, params, req.body, "cta_url");
+
+      if (siteHasOwn(req.body, "filtro_categoria_id")) {
+        updates.push("filtro_categoria_id = ?");
+        params.push(siteParseNullableInt(req.body.filtro_categoria_id));
+      }
+
+      if (siteHasOwn(req.body, "limite_productos")) {
+        updates.push("limite_productos = ?");
+        params.push(siteParseLimit(req.body.limite_productos, 8));
+      }
+
+      if (siteHasOwn(req.body, "metadata") || siteHasOwn(req.body, "metadata_json")) {
+        updates.push("metadata_json = ?");
+        params.push(siteJsonToDb(req.body.metadata || req.body.metadata_json));
+      }
+
+      if (siteHasOwn(req.body, "orden")) {
+        updates.push("orden = ?");
+        params.push(siteParseOrder(req.body.orden, 0));
+      }
+
+      if (siteHasOwn(req.body, "activo")) {
+        updates.push("activo = ?");
+        params.push(parseBooleanFlag(req.body.activo, 1));
+      }
+
+      if (!updates.length) {
+        return res.status(400).json({
+          ok: false,
+          error: "No hay cambios válidos.",
+        });
+      }
+
+      params.push(id);
+
+      const [result] = await pool.query(
+        `
+        UPDATE site_featured_sections
+        SET
+          ${updates.join(", ")},
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        `,
+        params
+      );
+
+      if (result.affectedRows === 0) {
+        return res.status(404).json({
+          ok: false,
+          error: "Sección destacada no encontrada.",
+        });
+      }
+
+      res.json({
+        ok: true,
+        message: "Sección destacada actualizada correctamente.",
+      });
+    } catch (error) {
+      if (error?.code === "ER_DUP_ENTRY") {
+        return res.status(409).json({
+          ok: false,
+          error: "Ya existe una sección con ese section_key.",
+        });
+      }
+
+      next(error);
+    }
+  }
+);
+
+router.delete("/admin/site/secciones-destacadas/:id",
+  requireAdminAuth,
+  requireRole(["ADMIN"]),
+  async (req, res, next) => {
+    try {
+      const id = Number.parseInt(req.params.id, 10);
+
+      const [result] = await pool.query(
+        `
+        UPDATE site_featured_sections
+        SET activo = 0, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        `,
+        [id]
+      );
+
+      if (result.affectedRows === 0) {
+        return res.status(404).json({
+          ok: false,
+          error: "Sección destacada no encontrada.",
+        });
+      }
+
+      res.json({
+        ok: true,
+        message: "Sección destacada desactivada correctamente.",
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/* CONTACTO / WHATSAPP */
+
+router.get("/admin/site/contacto", requireAdminAuth, async (req, res, next) => {
+  try {
+    const { whereSql, params } = siteBuildSimpleWhere(req.query, {
+      tipo: "tipo",
+      qColumns: [
+        "channel_key",
+        "tipo",
+        "etiqueta",
+        "valor",
+        "url",
+        "descripcion",
+      ],
+    });
+
+    const [rows] = await pool.query(
+      `
+      SELECT
+        id,
+        channel_key,
+        tipo,
+        etiqueta,
+        valor,
+        url,
+        icono,
+        descripcion,
+        metadata_json,
+        orden,
+        activo,
+        created_at,
+        updated_at
+      FROM site_contact_channels
+      ${whereSql}
+      ORDER BY activo DESC, orden ASC, id ASC
+      `,
+      params
+    );
+
+    res.json({
+      ok: true,
+      data: rows.map(siteCleanRow),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/admin/site/contacto",
+  requireAdminAuth,
+  requireRole(["ADMIN"]),
+  async (req, res, next) => {
+    try {
+      const channelKey = cleanString(req.body.channel_key);
+      const tipo = cleanString(req.body.tipo);
+      const etiqueta = cleanString(req.body.etiqueta);
+
+      if (!channelKey || !tipo || !etiqueta) {
+        return res.status(400).json({
+          ok: false,
+          error: "channel_key, tipo y etiqueta son obligatorios.",
+        });
+      }
+
+      const [result] = await pool.query(
+        `
+        INSERT INTO site_contact_channels (
+          channel_key,
+          tipo,
+          etiqueta,
+          valor,
+          url,
+          icono,
+          descripcion,
+          metadata_json,
+          orden,
+          activo
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+        [
+          channelKey,
+          tipo,
+          etiqueta,
+          cleanString(req.body.valor),
+          cleanString(req.body.url),
+          cleanString(req.body.icono),
+          cleanString(req.body.descripcion),
+          siteJsonToDb(req.body.metadata || req.body.metadata_json),
+          siteParseOrder(req.body.orden, 0),
+          parseBooleanFlag(req.body.activo, 1),
+        ]
+      );
+
+      res.status(201).json({
+        ok: true,
+        message: "Canal de contacto creado correctamente.",
+        data: {
+          id: result.insertId,
+        },
+      });
+    } catch (error) {
+      if (error?.code === "ER_DUP_ENTRY") {
+        return res.status(409).json({
+          ok: false,
+          error: "Ya existe un canal con ese channel_key.",
+        });
+      }
+
+      next(error);
+    }
+  }
+);
+
+router.patch("/admin/site/contacto/:id",
+  requireAdminAuth,
+  requireRole(["ADMIN"]),
+  async (req, res, next) => {
+    try {
+      const id = Number.parseInt(req.params.id, 10);
+
+      const updates = [];
+      const params = [];
+
+      sitePushUpdate(updates, params, req.body, "channel_key");
+      sitePushUpdate(updates, params, req.body, "tipo");
+      sitePushUpdate(updates, params, req.body, "etiqueta");
+      sitePushUpdate(updates, params, req.body, "valor");
+      sitePushUpdate(updates, params, req.body, "url");
+      sitePushUpdate(updates, params, req.body, "icono");
+      sitePushUpdate(updates, params, req.body, "descripcion");
+
+      if (siteHasOwn(req.body, "metadata") || siteHasOwn(req.body, "metadata_json")) {
+        updates.push("metadata_json = ?");
+        params.push(siteJsonToDb(req.body.metadata || req.body.metadata_json));
+      }
+
+      if (siteHasOwn(req.body, "orden")) {
+        updates.push("orden = ?");
+        params.push(siteParseOrder(req.body.orden, 0));
+      }
+
+      if (siteHasOwn(req.body, "activo")) {
+        updates.push("activo = ?");
+        params.push(parseBooleanFlag(req.body.activo, 1));
+      }
+
+      if (!updates.length) {
+        return res.status(400).json({
+          ok: false,
+          error: "No hay cambios válidos.",
+        });
+      }
+
+      params.push(id);
+
+      const [result] = await pool.query(
+        `
+        UPDATE site_contact_channels
+        SET
+          ${updates.join(", ")},
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        `,
+        params
+      );
+
+      if (result.affectedRows === 0) {
+        return res.status(404).json({
+          ok: false,
+          error: "Canal de contacto no encontrado.",
+        });
+      }
+
+      res.json({
+        ok: true,
+        message: "Canal de contacto actualizado correctamente.",
+      });
+    } catch (error) {
+      if (error?.code === "ER_DUP_ENTRY") {
+        return res.status(409).json({
+          ok: false,
+          error: "Ya existe un canal con ese channel_key.",
+        });
+      }
+
+      next(error);
+    }
+  }
+);
+
+router.delete("/admin/site/contacto/:id",
+  requireAdminAuth,
+  requireRole(["ADMIN"]),
+  async (req, res, next) => {
+    try {
+      const id = Number.parseInt(req.params.id, 10);
+
+      const [result] = await pool.query(
+        `
+        UPDATE site_contact_channels
+        SET activo = 0, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        `,
+        [id]
+      );
+
+      if (result.affectedRows === 0) {
+        return res.status(404).json({
+          ok: false,
+          error: "Canal de contacto no encontrado.",
+        });
+      }
+
+      res.json({
+        ok: true,
+        message: "Canal de contacto desactivado correctamente.",
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
 export default router;
