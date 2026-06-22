@@ -420,11 +420,11 @@ router.get("/armadoras", async (req, res, next) => {
 });
 
 router.get("/productos/destacados", async (req, res, next) => {
-    try {
-        const limit = clampNumber(parsePositiveInt(req.query.limit, 8), 1, 24);
+  try {
+    const limit = clampNumber(parsePositiveInt(req.query.limit, 8), 1, 24);
 
-        const [rows] = await pool.query(
-            `
+    const [rows] = await pool.query(
+      `
       SELECT
         p.id,
         p.codigo_andyfers,
@@ -438,6 +438,7 @@ router.get("/productos/destacados", async (req, res, next) => {
         p.unidad_medida,
         p.prioridad_ia,
         p.nuevo_web,
+        p.destacado,
         COALESCE(SUM(CASE WHEN i.disponible_web = 1 THEN i.stock ELSE 0 END), 0) AS stock_total_web,
         MIN(i.precio) AS precio_minimo,
         COUNT(DISTINCT pc.id) AS total_cruces,
@@ -448,6 +449,9 @@ router.get("/productos/destacados", async (req, res, next) => {
       LEFT JOIN producto_cruces pc ON pc.producto_id = p.id
       WHERE p.activo = 1
         AND p.activo_web = 1
+        AND p.visible_catalogo = 1
+        AND p.destacado = 1
+        AND ${buildValidPublicCodeCondition("p")}
       GROUP BY
         p.id,
         p.codigo_andyfers,
@@ -460,21 +464,26 @@ router.get("/productos/destacados", async (req, res, next) => {
         p.multiplo,
         p.unidad_medida,
         p.prioridad_ia,
-        p.nuevo_web
-      ORDER BY p.nuevo_web DESC, p.prioridad_ia DESC, p.id DESC
+        p.nuevo_web,
+        p.destacado
+      ORDER BY
+        p.prioridad_ia DESC,
+        p.nuevo_web DESC,
+        p.id DESC
       LIMIT ?
       `,
-            [limit],
-        );
+      [limit]
+    );
 
-        res.json({
-            ok: true,
-            data: rows,
-        });
-    } catch (error) {
-        next(error);
-    }
+    res.json({
+      ok: true,
+      data: rows,
+    });
+  } catch (error) {
+    next(error);
+  }
 });
+
 router.get("/vehiculos/anios", async (req, res, next) => {
     try {
         const [rows] = await pool.query(`
