@@ -11,6 +11,12 @@ import adminRoutes from "./routes/admin.routes.js";
 import homeRoutes from "./routes/home.routes.js";
 import siteRoutes from "./routes/site.routes.js";
 import aiRoutes from './routes/ai.routes.js';
+import analyticsRoutes from "./routes/analytics.routes.js";
+import catalogQualityRoutes from "./routes/catalogQuality.routes.js";
+import commercialTasksRoutes from "./routes/commercialTasks.routes.js";
+import commercialExportsRoutes from "./routes/commercialExports.routes.js";
+import multimediaReviewRoutes from "./routes/multimediaReview.routes.js";
+import seoRoutes from "./routes/seo.routes.js";
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -52,6 +58,12 @@ app.use("/api", homeRoutes);
 app.use("/api", adminRoutes);
 app.use("/api", aiRoutes);
 app.use("/api", siteRoutes);
+app.use("/api", analyticsRoutes);
+app.use("/api", catalogQualityRoutes);
+app.use("/api", commercialTasksRoutes);
+app.use("/api", commercialExportsRoutes);
+app.use("/api", multimediaReviewRoutes)
+app.use("/api", seoRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

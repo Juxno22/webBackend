@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { pool } from "../config/db.js";
+import { trackAnalyticsEventSafe } from "../services/analytics.service.js";
 
 const router = Router();
 
@@ -219,6 +220,7 @@ async function getProductSnapshot(connection, item) {
       p.descripcion,
       p.familia,
       p.armadora,
+      p.categoria_id,
       c.nombre AS categoria,
       COALESCE(SUM(CASE WHEN i.disponible_web = 1 THEN i.stock ELSE 0 END), 0) AS stock_referencia,
       MIN(i.precio) AS precio_referencia
@@ -233,6 +235,7 @@ async function getProductSnapshot(connection, item) {
       p.descripcion,
       p.familia,
       p.armadora,
+      p.categoria_id,
       c.nombre
     LIMIT 1
     `,
@@ -420,12 +423,25 @@ router.post("/cotizaciones", async (req, res, next) => {
         );
 
         const cotizacionId = cotizacionResult.insertId;
+        const quoteAnalyticsItems = [];
 
         for (const item of payload.productos) {
             const snapshot = await getProductSnapshot(connection, item);
             const cantidad = parsePositiveQuantity(item.cantidad);
 
             if (!snapshot) {
+                quoteAnalyticsItems.push({
+                    producto_id: null,
+                    codigo_andyfers: cleanString(item.codigo_andyfers),
+                    codigo_importacion: cleanString(item.codigo_importacion),
+                    descripcion: cleanString(item.descripcion) || "Producto solicitado sin descripción",
+                    familia: cleanString(item.familia),
+                    armadora: cleanString(item.armadora),
+                    categoria_nombre: cleanString(item.categoria),
+                    cantidad,
+                    compatibilidad_estimada: parseOptionalNumber(item.compatibilidad_estimada),
+                });
+
                 await connection.query(
                     `
           INSERT INTO cotizacion_items (
@@ -465,6 +481,19 @@ router.post("/cotizaciones", async (req, res, next) => {
 
                 continue;
             }
+
+            quoteAnalyticsItems.push({
+                producto_id: snapshot.id,
+                codigo_andyfers: snapshot.codigo_andyfers,
+                codigo_importacion: snapshot.codigo_importacion,
+                descripcion: snapshot.descripcion,
+                familia: snapshot.familia,
+                armadora: snapshot.armadora,
+                categoria_id: snapshot.categoria_id,
+                categoria_nombre: snapshot.categoria,
+                cantidad,
+                compatibilidad_estimada: parseOptionalNumber(item.compatibilidad_estimada),
+            });
 
             await connection.query(
                 `
@@ -523,6 +552,51 @@ router.post("/cotizaciones", async (req, res, next) => {
         );
 
         await connection.commit();
+
+        await trackAnalyticsEventSafe(req, {
+            evento: "COTIZACION_GENERADA",
+            origen: cleanString(payload.origen) || "CATALOGO",
+            cotizacion_id: cotizacionId,
+            cotizacion_folio: folio,
+            marca_vehiculo: cleanString(payload.marca_vehiculo),
+            modelo_vehiculo: cleanString(payload.modelo_vehiculo),
+            anio_vehiculo: cleanString(payload.anio_vehiculo),
+            motor_vehiculo: cleanString(payload.motor_vehiculo),
+            metadata: {
+                total_productos: quoteAnalyticsItems.length,
+                total_piezas: quoteAnalyticsItems.reduce(
+                    (total, item) => total + Number(item.cantidad || 0),
+                    0
+                ),
+                ciudad: cleanString(payload.ciudad),
+                estado_cliente: cleanString(payload.estado_cliente),
+            },
+        });
+
+        for (const analyticsItem of quoteAnalyticsItems) {
+            await trackAnalyticsEventSafe(req, {
+                evento: "PRODUCTO_AGREGADO_COTIZACION",
+                origen: cleanString(payload.origen) || "CATALOGO",
+                cotizacion_id: cotizacionId,
+                cotizacion_folio: folio,
+                producto_id: analyticsItem.producto_id,
+                codigo_andyfers: analyticsItem.codigo_andyfers,
+                codigo_importacion: analyticsItem.codigo_importacion,
+                categoria_id: analyticsItem.categoria_id,
+                categoria_nombre: analyticsItem.categoria_nombre,
+                familia: analyticsItem.familia,
+                cantidad: analyticsItem.cantidad,
+                marca_vehiculo: cleanString(payload.marca_vehiculo),
+                modelo_vehiculo: cleanString(payload.modelo_vehiculo),
+                anio_vehiculo: cleanString(payload.anio_vehiculo),
+                motor_vehiculo: cleanString(payload.motor_vehiculo),
+                metadata: {
+                    descripcion: analyticsItem.descripcion,
+                    armadora: analyticsItem.armadora,
+                    compatibilidad_estimada: analyticsItem.compatibilidad_estimada,
+                },
+            });
+        }
 
         res.status(201).json({
             ok: true,
