@@ -1,6 +1,11 @@
 import { Router } from "express";
 import { pool } from "../config/db.js";
 import { requireAdminAuth, requireRole } from "../middleware/authAdmin.js";
+import {
+  isCriticalAdminAction,
+  recordCriticalActionLog,
+  validateCriticalActionPayload,
+} from "../services/adminCriticalAction.service.js";
 
 const router = Router();
 const taskAccess = [requireAdminAuth, requireRole(["ADMIN", "VENTAS", "COMPRAS"])] ;
@@ -1031,6 +1036,40 @@ router.delete("/admin/pendientes-comerciales/:id", taskAccess, async (req, res, 
       return res.status(400).json({ ok: false, error: "ID inválido." });
     }
 
+    const criticalValidation = validateCriticalActionPayload(req, "DESCARTAR_PENDIENTE", {
+      resourceType: "catalogo_pendientes_comerciales",
+      resourceId: String(id),
+    });
+
+    if (criticalValidation.isCritical && !criticalValidation.ok) {
+      await recordCriticalActionLog(req, {
+        action: "DESCARTAR_PENDIENTE",
+        label: criticalValidation.label,
+        status: "BLOQUEADA",
+        severidad: criticalValidation.severidad,
+        resource_type: "catalogo_pendientes_comerciales",
+        resource_id: String(id),
+        pendiente_id: id,
+        confirmation_text: criticalValidation.confirmation,
+        motivo: criticalValidation.motivo,
+        error_message: criticalValidation.error,
+        metadata: { endpoint: req.originalUrl || req.url },
+      });
+
+      return res.status(400).json({
+        ok: false,
+        critical_action: true,
+        expected_confirmation: criticalValidation.expected_confirmation,
+        error: criticalValidation.error,
+      });
+    }
+
+    const [taskRows] = await pool.query(
+      `SELECT id, producto_id, codigo_andyfers, titulo FROM catalogo_pendientes_comerciales WHERE id = ? LIMIT 1`,
+      [id]
+    );
+    const task = taskRows?.[0] || null;
+
     const [result] = await pool.query(
       `
       UPDATE catalogo_pendientes_comerciales
@@ -1046,6 +1085,23 @@ router.delete("/admin/pendientes-comerciales/:id", taskAccess, async (req, res, 
     if (!result.affectedRows) {
       return res.status(404).json({ ok: false, error: "Pendiente no encontrado." });
     }
+
+    await recordCriticalActionLog(req, {
+      action: "DESCARTAR_PENDIENTE",
+      label: criticalValidation.label,
+      status: "APLICADA",
+      severidad: criticalValidation.severidad,
+      resource_type: "catalogo_pendientes_comerciales",
+      resource_id: String(id),
+      producto_id: task?.producto_id || null,
+      pendiente_id: id,
+      confirmation_text: criticalValidation.confirmation,
+      motivo: criticalValidation.motivo,
+      metadata: {
+        codigo_andyfers: task?.codigo_andyfers || null,
+        titulo: task?.titulo || null,
+      },
+    });
 
     res.json({ ok: true, message: "Pendiente descartado correctamente." });
   } catch (error) {
@@ -1415,6 +1471,34 @@ router.post(
         return res.status(400).json({ ok: false, error: "Acción operativa inválida." });
       }
 
+      const criticalValidation = validateCriticalActionPayload(req, action, {
+        resourceType: "catalogo_pendientes_comerciales",
+        resourceId: String(id),
+      });
+
+      if (criticalValidation.isCritical && !criticalValidation.ok) {
+        await recordCriticalActionLog(req, {
+          action,
+          label: criticalValidation.label,
+          status: "BLOQUEADA",
+          severidad: criticalValidation.severidad,
+          resource_type: "catalogo_pendientes_comerciales",
+          resource_id: String(id),
+          pendiente_id: id,
+          confirmation_text: criticalValidation.confirmation,
+          motivo: criticalValidation.motivo,
+          error_message: criticalValidation.error,
+          metadata: { endpoint: req.originalUrl || req.url },
+        });
+
+        return res.status(400).json({
+          ok: false,
+          critical_action: true,
+          expected_confirmation: criticalValidation.expected_confirmation,
+          error: criticalValidation.error,
+        });
+      }
+
       await connection.beginTransaction();
 
       const task = await getCommercialTaskById(connection, id);
@@ -1537,6 +1621,29 @@ router.post(
           ? [nextEstado, user, actionNote, actionNote, id]
           : [user, actionNote, actionNote, id]
       );
+
+      if (isCriticalAdminAction(action)) {
+        await recordCriticalActionLog(req, {
+          action,
+          label: criticalValidation.label,
+          status: "APLICADA",
+          severidad: criticalValidation.severidad,
+          resource_type: "catalogo_pendientes_comerciales",
+          resource_id: String(id),
+          producto_id: task.producto_id || null,
+          pendiente_id: id,
+          confirmation_text: criticalValidation.confirmation,
+          motivo: criticalValidation.motivo,
+          metadata: {
+            codigo_andyfers: task.codigo_andyfers || null,
+            tipo_pendiente: task.tipo_pendiente || null,
+            estado_anterior: task.estado || null,
+            estado_nuevo: nextEstado || task.estado || null,
+            product_updates: productUpdates,
+            nota: note || null,
+          },
+        }, connection);
+      }
 
       await connection.commit();
 
