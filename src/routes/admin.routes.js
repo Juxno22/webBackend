@@ -6,6 +6,7 @@ import { v2 as cloudinary } from 'cloudinary';
 import { pool } from "../config/db.js";
 import { requireAdminAuth, requireRole } from "../middleware/authAdmin.js";
 import { normalizePartNumber, normalizeText } from "../utils/normalize.js";
+import { cleanString, parsePositiveInt, buildPagination } from "../utils/queryHelpers.js";
 
 const router = Router();
 
@@ -41,30 +42,6 @@ const ESTADOS_VALIDOS = [
 ];
 
 //AUTENTICACION
-function cleanString(value) {
-  if (value === undefined || value === null) return null;
-
-  const clean = String(value).trim();
-
-  return clean === "" ? null : clean;
-}
-
-function parsePositiveInt(value, fallback = 1) {
-  const parsed = Number.parseInt(value, 10);
-
-  if (Number.isNaN(parsed) || parsed < 1) return fallback;
-
-  return parsed;
-}
-
-function buildPagination(query) {
-  const page = parsePositiveInt(query.page, 1);
-  const limit = Math.min(parsePositiveInt(query.limit, 20), 80);
-  const offset = (page - 1) * limit;
-
-  return { page, limit, offset };
-}
-
 router.post("/admin/login", async (req, res, next) => {
   try {
     const correo = cleanString(req.body.correo);

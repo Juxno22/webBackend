@@ -53,52 +53,54 @@ function normalizeYear(value) {
     return year;
 }
 
+const RESET_PATTERNS = [
+    /\bOLVIDA\b.*\bAUTO\b/,
+    /\bOLVIDA\b.*\bCARRO\b/,
+    /\bOLVIDA\b.*\bVEHICULO\b/,
+    /\bOLVIDA\b.*\bVEHÍCULO\b/,
+    /\bOLVIDA\b.*\bMOTO\b/,
+    /\bBORRA\b.*\bAUTO\b/,
+    /\bBORRA\b.*\bCARRO\b/,
+    /\bBORRA\b.*\bVEHICULO\b/,
+    /\bBORRA\b.*\bVEHÍCULO\b/,
+    /\bBORRA\b.*\bMOTO\b/,
+    /\bCAMBIAR\b.*\bVEHICULO\b/,
+    /\bCAMBIAR\b.*\bVEHÍCULO\b/,
+    /\bCAMBIAR\b.*\bAUTO\b/,
+    /\bCAMBIAR\b.*\bCARRO\b/,
+    /\bNUEVO\b.*\bAUTO\b/,
+    /\bNUEVO\b.*\bCARRO\b/,
+    /\bNUEVO\b.*\bVEHICULO\b/,
+    /\bNUEVO\b.*\bVEHÍCULO\b/,
+    /\bNUEVO\b.*\bMOTO\b/,
+    /\bREINICIAR\b/,
+    /\bRESETEAR\b/,
+    /\bRESET\b/,
+    /\bINICIAR\s+DE\s+NUEVO\b/,
+    /\bEMPEZAR\s+DE\s+NUEVO\b/,
+    /\bCOMENZAR\s+DE\s+NUEVO\b/,
+    /\bLIMPIAR\b.*\bSESION\b/,
+    /\bVACIAR\b.*\bSESION\b/,
+    /\bSELECCIONAR\s+OTRO\b/,
+    /\bESCOGER\s+OTRO\b/,
+    /\bELEGIR\s+OTRO\b/,
+    /\bCAMBIAR\s+DE\s+AUTO\b/,
+    /\bCAMBIAR\s+DE\s+CARRO\b/,
+    /\bCAMBIAR\s+DE\s+VEHICULO\b/,
+    /\bCAMBIAR\s+DE\s+VEHÍCULO\b/,
+    /\bNUEVA\s+BUSQUEDA\b/,
+    /\bNUEVA\s+BÚSQUEDA\b/,
+    /\bNUEVA\s+CONSULTA\b/,
+    /\bOTRA\s+CONSULTA\b/,
+    /\bOTRO\s+AUTO\b/,
+    /\bOTRO\s+CARRO\b/,
+    /\bOTRO\s+VEHICULO\b/,
+    /\bOTRO\s+VEHÍCULO\b/,
+];
+
 export function shouldResetSearchSession(question) {
     const text = normalizeText(question);
-    return (
-        /\bOLVIDA\b.*\bAUTO\b/.test(text) ||
-        /\bOLVIDA\b.*\bCARRO\b/.test(text) ||
-        /\bOLVIDA\b.*\bVEHICULO\b/.test(text) ||
-        /\bOLVIDA\b.*\bVEHÍCULO\b/.test(text) ||
-        /\bOLVIDA\b.*\bMOTO\b/.test(text) ||
-        /\bBORRA\b.*\bAUTO\b/.test(text) ||
-        /\bBORRA\b.*\bCARRO\b/.test(text) ||
-        /\bBORRA\b.*\bVEHICULO\b/.test(text) ||
-        /\bBORRA\b.*\bVEHÍCULO\b/.test(text) ||
-        /\bBORRA\b.*\bMOTO\b/.test(text) ||
-        /\bCAMBIAR\b.*\bVEHICULO\b/.test(text) ||
-        /\bCAMBIAR\b.*\bVEHÍCULO\b/.test(text) ||
-        /\bCAMBIAR\b.*\bAUTO\b/.test(text) ||
-        /\bCAMBIAR\b.*\bCARRO\b/.test(text) ||
-        /\bNUEVO\b.*\bAUTO\b/.test(text) ||
-        /\bNUEVO\b.*\bCARRO\b/.test(text) ||
-        /\bNUEVO\b.*\bVEHICULO\b/.test(text) ||
-        /\bNUEVO\b.*\bVEHÍCULO\b/.test(text) ||
-        /\bNUEVO\b.*\bMOTO\b/.test(text) ||
-        /\bREINICIAR\b/.test(text) ||
-        /\bRESETEAR\b/.test(text) ||
-        /\bRESET\b/.test(text) ||
-        /\bINICIAR\s+DE\s+NUEVO\b/.test(text) ||
-        /\bEMPEZAR\s+DE\s+NUEVO\b/.test(text) ||
-        /\bCOMENZAR\s+DE\s+NUEVO\b/.test(text) ||
-        /\bLIMPIAR\b.*\bSESION\b/.test(text) ||
-        /\bVACIAR\b.*\bSESION\b/.test(text) ||
-        /\bSELECCIONAR\s+OTRO\b/.test(text) ||
-        /\bESCOGER\s+OTRO\b/.test(text) ||
-        /\bELEGIR\s+OTRO\b/.test(text) ||
-        /\bCAMBIAR\s+DE\s+AUTO\b/.test(text) ||
-        /\bCAMBIAR\s+DE\s+CARRO\b/.test(text) ||
-        /\bCAMBIAR\s+DE\s+VEHICULO\b/.test(text) ||
-        /\bCAMBIAR\s+DE\s+VEHÍCULO\b/.test(text) ||
-        /\bNUEVA\s+BUSQUEDA\b/.test(text) ||
-        /\bNUEVA\s+BÚSQUEDA\b/.test(text) ||
-        /\bNUEVA\s+CONSULTA\b/.test(text) ||
-        /\bOTRA\s+CONSULTA\b/.test(text) ||
-        /\bOTRO\s+AUTO\b/.test(text) ||
-        /\bOTRO\s+CARRO\b/.test(text) ||
-        /\bOTRO\s+VEHICULO\b/.test(text) ||
-        /\bOTRO\s+VEHÍCULO\b/.test(text)
-    );
+    return RESET_PATTERNS.some((pattern) => pattern.test(text));
 }
 
 export function extractQuestionAfterSessionReset(question) {

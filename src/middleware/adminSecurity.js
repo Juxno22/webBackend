@@ -1,3 +1,5 @@
+// NOTA: Este rate limiter es de proceso único. Si se usa PM2 cluster,
+// se debe reemplazar por un almacén compartido (ej. Redis con rate-limiter-flexible).
 import { auditAdminAction, recordSecurityEvent } from "../services/adminAudit.service.js";
 
 const memoryBuckets = new Map();
@@ -19,7 +21,7 @@ function getAdminEmailFromBody(req) {
 }
 
 function cleanupBuckets(now) {
-  if (memoryBuckets.size < 2000) return;
+  if (memoryBuckets.size < 500) return;
 
   for (const [key, bucket] of memoryBuckets.entries()) {
     if (!bucket || bucket.resetAt <= now) memoryBuckets.delete(key);

@@ -1,16 +1,9 @@
 import { Router } from "express";
 import { pool } from "../config/db.js";
 import { trackAnalyticsEventSafe } from "../services/analytics.service.js";
+import { cleanString, parseCsvParam, placeholders } from "../utils/queryHelpers.js";
 
 const router = Router();
-
-function cleanString(value) {
-    if (value === undefined || value === null) return null;
-
-    const clean = String(value).trim();
-
-    return clean === "" ? null : clean;
-}
 
 function cleanPhone(value) {
     const clean = cleanString(value);
@@ -50,30 +43,12 @@ function parseOptionalNumber(value) {
     return number;
 }
 
-function parseCsvParam(value) {
-    if (!value) return [];
-
-    const rawValues = Array.isArray(value) ? value : String(value).split(",");
-
-    return [
-        ...new Set(
-            rawValues
-                .map((item) => cleanString(item))
-                .filter(Boolean)
-        ),
-    ];
-}
-
 function parseLimit(value, defaultLimit = 12, maxLimit = 24) {
     const limit = Number.parseInt(value, 10);
 
     if (Number.isNaN(limit) || limit < 1) return defaultLimit;
 
     return Math.min(limit, maxLimit);
-}
-
-function placeholders(values) {
-    return values.map(() => "?").join(", ");
 }
 
 function buildQuoteProductMultimediaSelectSql(alias = "p") {

@@ -1,17 +1,32 @@
 export function notFoundHandler(req, res) {
-    res.status(404).json({
-        ok: false,
-        error: "Ruta no encontrada",
-        path: req.originalUrl,
-    });
+  res.status(404).json({
+    ok: false,
+    error: "Ruta no encontrada",
+    path: req.originalUrl,
+  });
 }
 
 export function errorHandler(error, req, res, next) {
-    console.error("Error backend:", error);
+  const status = error.status || error.statusCode || 500;
+  const message = error.message || "Error interno";
 
-    res.status(error.status || 500).json({
-        ok: false,
-        error: error.message || "Error interno del servidor",
-        details: process.env.NODE_ENV === "development" ? error.stack : undefined,
-    });
+  console.error(
+    JSON.stringify({
+      ts: new Date().toISOString(),
+      status,
+      method: req.method,
+      url: req.originalUrl,
+      adminId: req.admin?.id || null,
+      message,
+      stack: process.env.NODE_ENV !== "production" ? error.stack : undefined,
+    })
+  );
+
+  res.status(status).json({
+    ok: false,
+    error:
+      status >= 500 && process.env.NODE_ENV === "production"
+        ? "Error interno del servidor"
+        : message,
+  });
 }

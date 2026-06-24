@@ -11,6 +11,7 @@ import {
   adminApiRateLimit,
   adminMutatingRateLimit,
   auditAdminMutations,
+  createFixedWindowRateLimit,
 } from "./middleware/adminSecurity.js";
 
 import healthRoutes from "./routes/health.routes.js";
@@ -30,6 +31,7 @@ import aiRoutes from "./routes/ai.routes.js";
 import performanceRoutes from "./routes/performance.routes.js";
 import productionRoutes from "./routes/production.routes.js";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler.js";
+import { pool } from "./config/db.js";
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -56,7 +58,7 @@ app.use(
 
 app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({ extended: true }));
-app.use(morgan("dev"));
+app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev"));
 
 app.get("/", (req, res) => {
   res.json({
@@ -91,6 +93,26 @@ app.use("/api", commercialExportsRoutes);
 app.use("/api", multimediaReviewRoutes);
 app.use("/api", seoRoutes);
 app.use("/api", seoLandingRoutes);
+
+const publicAiRateLimit = createFixedWindowRateLimit({
+  windowMs: 60_000,
+  max: Number(process.env.PUBLIC_AI_RATE_LIMIT_MAX || 15),
+  message: "Demasiadas consultas al asistente. Espera un momento.",
+  eventType: "PUBLIC_AI_RATE_LIMIT",
+  severidad: "MEDIA",
+  keyGenerator: (req) => {
+    const ip =
+      req.headers["x-forwarded-for"]?.split(",")?.[0]?.trim() ||
+      req.headers["x-real-ip"] ||
+      req.socket?.remoteAddress ||
+      req.ip ||
+      "unknown";
+    const sessionId = String(req.body?.session_id || "no-session").slice(0, 80);
+    return `ai:${ip}:${sessionId}`;
+  },
+});
+
+app.use("/api/ia", publicAiRateLimit);
 app.use("/api", aiRoutes);
 app.use("/api", performanceRoutes);
 app.use("/api", productionRoutes);
@@ -98,6 +120,15 @@ app.use("/api", productionRoutes);
 app.use(notFoundHandler);
 app.use(errorHandler);
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Andyfers Backend API corriendo en http://localhost:${PORT}`);
+});
+
+process.on("SIGTERM", async () => {
+  try {
+    server.close();
+    await pool.end();
+  } finally {
+    process.exit(0);
+  }
 });

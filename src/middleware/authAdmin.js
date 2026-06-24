@@ -1,6 +1,44 @@
 import jwt from "jsonwebtoken";
 import { pool } from "../config/db.js";
 
+const userCache = new Map();
+const CACHE_TTL = 30_000;
+
+async function getAdminUserCached(id) {
+  const cached = userCache.get(id);
+
+  if (cached && Date.now() - cached.ts < CACHE_TTL) {
+    return cached.user;
+  }
+
+  const [rows] = await pool.query(
+    `
+      SELECT
+        id,
+        nombre,
+        correo,
+        rol,
+        activo
+      FROM usuarios_admin
+      WHERE id = ?
+      LIMIT 1
+      `,
+    [id]
+  );
+
+  const user = rows?.[0] || null;
+
+  if (user) {
+    userCache.set(id, { user, ts: Date.now() });
+  }
+
+  return user;
+}
+
+export function invalidateAdminUserCache(id) {
+  userCache.delete(id);
+}
+
 export async function requireAdminAuth(req, res, next) {
   try {
     const authHeader = req.headers.authorization || "";
@@ -16,22 +54,7 @@ export async function requireAdminAuth(req, res, next) {
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-    const [rows] = await pool.query(
-      `
-      SELECT
-        id,
-        nombre,
-        correo,
-        rol,
-        activo
-      FROM usuarios_admin
-      WHERE id = ?
-      LIMIT 1
-      `,
-      [decoded.id]
-    );
-
-    const user = rows?.[0];
+    const user = await getAdminUserCached(decoded.id);
 
     if (!user || Number(user.activo) !== 1) {
       return res.status(401).json({
