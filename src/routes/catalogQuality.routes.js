@@ -101,6 +101,13 @@ const flagSql = {
   `,
   sin_cruces: `COALESCE(pc.total_cruces, 0) = 0`,
   sin_aplicaciones: `COALESCE(pa.total_aplicaciones, 0) = 0`,
+  sin_atributos_buscables: `COALESCE(pat.total_atributos_buscables, 0) = 0`,
+  sin_familia: `(p.familia IS NULL OR TRIM(p.familia) = '')`,
+  sin_imagen_principal: `COALESCE(pm.total_principales, 0) = 0`,
+  sin_thumbnail: `(
+    COALESCE(pm.total_imagenes, 0) > 0
+    AND COALESCE(pm.total_thumbnails, 0) = 0
+  )`,
   sin_stock: `COALESCE(inv.stock_total_web, 0) <= 0`,
   sin_precio: `(inv.precio_minimo IS NULL OR inv.precio_minimo <= 0)`,
   codigo_sospechoso: `
@@ -118,8 +125,13 @@ flagSql.visible_incompleto = `
     AND p.visible_catalogo = 1
     AND (
       ${flagSql.sin_imagen}
+      OR ${flagSql.sin_imagen_principal}
       OR ${flagSql.sin_descripcion_web}
       OR ${flagSql.sin_cruces}
+      OR ${flagSql.sin_aplicaciones}
+      OR ${flagSql.sin_atributos_buscables}
+      OR ${flagSql.sin_familia}
+      OR ${flagSql.codigo_sospechoso}
     )
   )
 `;
@@ -149,7 +161,8 @@ function productQualityBaseSql({ includeAnalytics = true } = {}) {
       SELECT
         producto_id,
         COUNT(*) AS total_imagenes,
-        SUM(CASE WHEN rol = 'PRINCIPAL' THEN 1 ELSE 0 END) AS total_principales
+        SUM(CASE WHEN rol = 'PRINCIPAL' THEN 1 ELSE 0 END) AS total_principales,
+        SUM(CASE WHEN thumbnail_url IS NOT NULL AND TRIM(thumbnail_url) <> '' THEN 1 ELSE 0 END) AS total_thumbnails
       FROM producto_multimedia
       WHERE activo = 1
         AND tipo = 'IMAGEN'
@@ -172,6 +185,16 @@ function productQualityBaseSql({ includeAnalytics = true } = {}) {
       GROUP BY producto_id
     ) pa
       ON pa.producto_id = p.id
+    LEFT JOIN (
+      SELECT
+        producto_id,
+        COUNT(*) AS total_atributos,
+        SUM(CASE WHEN buscable = 1 THEN 1 ELSE 0 END) AS total_atributos_buscables,
+        SUM(CASE WHEN visible_web = 1 THEN 1 ELSE 0 END) AS total_atributos_visibles
+      FROM producto_atributos
+      GROUP BY producto_id
+    ) pat
+      ON pat.producto_id = p.id
     LEFT JOIN (
       SELECT
         producto_id,
@@ -239,8 +262,12 @@ function productQualitySelectSql() {
 
       COALESCE(pm.total_imagenes, 0) AS total_imagenes,
       COALESCE(pm.total_principales, 0) AS total_imagenes_principales,
+      COALESCE(pm.total_thumbnails, 0) AS total_thumbnails,
       COALESCE(pc.total_cruces, 0) AS total_cruces,
       COALESCE(pa.total_aplicaciones, 0) AS total_aplicaciones,
+      COALESCE(pat.total_atributos, 0) AS total_atributos,
+      COALESCE(pat.total_atributos_buscables, 0) AS total_atributos_buscables,
+      COALESCE(pat.total_atributos_visibles, 0) AS total_atributos_visibles,
       COALESCE(inv.stock_total_web, 0) AS stock_total_web,
       inv.precio_minimo,
 
@@ -253,16 +280,42 @@ function productQualitySelectSql() {
       CASE WHEN ${flagSql.sin_descripcion_web} THEN 1 ELSE 0 END AS sin_descripcion_web,
       CASE WHEN ${flagSql.sin_cruces} THEN 1 ELSE 0 END AS sin_cruces,
       CASE WHEN ${flagSql.sin_aplicaciones} THEN 1 ELSE 0 END AS sin_aplicaciones,
+      CASE WHEN ${flagSql.sin_atributos_buscables} THEN 1 ELSE 0 END AS sin_atributos_buscables,
+      CASE WHEN ${flagSql.sin_familia} THEN 1 ELSE 0 END AS sin_familia,
+      CASE WHEN ${flagSql.sin_imagen_principal} THEN 1 ELSE 0 END AS sin_imagen_principal,
+      CASE WHEN ${flagSql.sin_thumbnail} THEN 1 ELSE 0 END AS sin_thumbnail,
       CASE WHEN ${flagSql.sin_stock} THEN 1 ELSE 0 END AS sin_stock,
       CASE WHEN ${flagSql.sin_precio} THEN 1 ELSE 0 END AS sin_precio,
       CASE WHEN ${flagSql.codigo_sospechoso} THEN 1 ELSE 0 END AS codigo_sospechoso,
       CASE WHEN ${flagSql.visible_incompleto} THEN 1 ELSE 0 END AS visible_incompleto,
+      CASE
+        WHEN p.activo = 1 AND p.activo_web = 1 AND p.visible_catalogo = 1 AND ${flagSql.visible_incompleto} THEN 'CRITICO'
+        WHEN ${flagSql.sin_imagen} OR ${flagSql.sin_imagen_principal} OR ${flagSql.codigo_sospechoso} THEN 'ALTA'
+        WHEN ${flagSql.sin_descripcion_web} OR ${flagSql.sin_cruces} OR ${flagSql.sin_aplicaciones} OR ${flagSql.sin_atributos_buscables} THEN 'MEDIA'
+        ELSE 'OK'
+      END AS severidad_calidad,
+      CASE
+        WHEN ${flagSql.sin_imagen} THEN 'Subir imagen principal del producto'
+        WHEN ${flagSql.sin_imagen_principal} THEN 'Marcar una imagen como principal'
+        WHEN ${flagSql.codigo_sospechoso} THEN 'Corregir código Andyfers/importación'
+        WHEN ${flagSql.sin_descripcion_web} THEN 'Completar descripción web'
+        WHEN ${flagSql.sin_cruces} THEN 'Agregar cruces equivalentes'
+        WHEN ${flagSql.sin_aplicaciones} THEN 'Agregar aplicaciones vehiculares'
+        WHEN ${flagSql.sin_atributos_buscables} THEN 'Agregar atributos buscables'
+        WHEN ${flagSql.sin_familia} THEN 'Asignar familia'
+        WHEN ${flagSql.sin_thumbnail} THEN 'Regenerar thumbnail'
+        ELSE 'Sin acción crítica'
+      END AS accion_sugerida,
 
       (
-        CASE WHEN ${flagSql.sin_imagen} THEN 35 ELSE 0 END +
+        CASE WHEN ${flagSql.sin_imagen} THEN 40 ELSE 0 END +
+        CASE WHEN ${flagSql.sin_imagen_principal} THEN 25 ELSE 0 END +
+        CASE WHEN ${flagSql.sin_thumbnail} THEN 8 ELSE 0 END +
         CASE WHEN ${flagSql.sin_descripcion_web} THEN 12 ELSE 0 END +
         CASE WHEN ${flagSql.sin_cruces} THEN 18 ELSE 0 END +
         CASE WHEN ${flagSql.sin_aplicaciones} THEN 18 ELSE 0 END +
+        CASE WHEN ${flagSql.sin_atributos_buscables} THEN 12 ELSE 0 END +
+        CASE WHEN ${flagSql.sin_familia} THEN 20 ELSE 0 END +
         CASE WHEN ${flagSql.sin_stock} THEN 8 ELSE 0 END +
         CASE WHEN ${flagSql.sin_precio} THEN 6 ELSE 0 END +
         CASE WHEN ${flagSql.codigo_sospechoso} THEN 30 ELSE 0 END +
@@ -352,6 +405,10 @@ function buildProductFilters(query = {}) {
     SIN_DESCRIPCION_WEB: flagSql.sin_descripcion_web,
     SIN_CRUCES: flagSql.sin_cruces,
     SIN_APLICACIONES: flagSql.sin_aplicaciones,
+    SIN_ATRIBUTOS_BUSCABLES: flagSql.sin_atributos_buscables,
+    SIN_FAMILIA: flagSql.sin_familia,
+    SIN_IMAGEN_PRINCIPAL: flagSql.sin_imagen_principal,
+    SIN_THUMBNAIL: flagSql.sin_thumbnail,
     SIN_STOCK: flagSql.sin_stock,
     SIN_PRECIO: flagSql.sin_precio,
     CODIGO_SOSPECHOSO: flagSql.codigo_sospechoso,
@@ -386,6 +443,187 @@ function resolveOrder(query = {}) {
   return orders[order] || orders.PRIORIDAD;
 }
 
+function toNumber(value) {
+  const number = Number(value || 0);
+
+  return Number.isFinite(number) ? number : 0;
+}
+
+function buildCatalogCloseStatus(kpis = {}) {
+  const totalPublicados = toNumber(kpis.publicados_web);
+  const visiblesIncompletos = toNumber(kpis.visibles_incompletos);
+  const cotizadosSinImagen = toNumber(kpis.cotizados_sin_imagen);
+  const codigoSospechoso = toNumber(kpis.codigo_sospechoso);
+  const sinImagen = toNumber(kpis.sin_imagen);
+  const sinImagenPrincipal = toNumber(kpis.sin_imagen_principal);
+  const sinAtributosBuscables = toNumber(kpis.sin_atributos_buscables);
+  const sinFamilia = toNumber(kpis.sin_familia);
+
+  const bloqueantes = [];
+  const advertencias = [];
+
+  if (totalPublicados <= 0) {
+    bloqueantes.push({
+      key: "SIN_PRODUCTOS_PUBLICADOS",
+      label: "No hay productos publicados en catálogo web.",
+      action: "Validar activo_web y visible_catalogo antes de publicar.",
+    });
+  }
+
+  if (visiblesIncompletos > 0) {
+    bloqueantes.push({
+      key: "VISIBLES_INCOMPLETOS",
+      label: `${visiblesIncompletos} productos visibles están incompletos.`,
+      action: "Revisar la tabla priorizada y corregir producto por producto desde admin.",
+    });
+  }
+
+  if (cotizadosSinImagen > 0) {
+    bloqueantes.push({
+      key: "COTIZADOS_SIN_IMAGEN",
+      label: `${cotizadosSinImagen} productos cotizados/agregados no tienen imagen.`,
+      action: "Subir imagen principal a los productos con demanda antes de publicar.",
+    });
+  }
+
+  if (codigoSospechoso > 0) {
+    bloqueantes.push({
+      key: "CODIGO_SOSPECHOSO",
+      label: `${codigoSospechoso} productos tienen código sospechoso o vacío.`,
+      action: "Corregir código Andyfers o código de importación.",
+    });
+  }
+
+  if (sinImagen > 0) {
+    advertencias.push({
+      key: "SIN_IMAGEN",
+      label: `${sinImagen} productos activos no tienen imagen cargada.`,
+      action: "Completar imágenes por prioridad comercial.",
+    });
+  }
+
+  if (sinImagenPrincipal > 0) {
+    advertencias.push({
+      key: "SIN_IMAGEN_PRINCIPAL",
+      label: `${sinImagenPrincipal} productos no tienen imagen principal definida.`,
+      action: "Asignar una imagen principal desde el panel de multimedia.",
+    });
+  }
+
+  if (sinAtributosBuscables > 0) {
+    advertencias.push({
+      key: "SIN_ATRIBUTOS_BUSCABLES",
+      label: `${sinAtributosBuscables} productos no tienen atributos buscables.`,
+      action: "Agregar atributos útiles para búsqueda y filtros.",
+    });
+  }
+
+  if (sinFamilia > 0) {
+    advertencias.push({
+      key: "SIN_FAMILIA",
+      label: `${sinFamilia} productos no tienen familia asignada.`,
+      action: "Asignar familia para mejorar navegación y filtros.",
+    });
+  }
+
+  return {
+    apto_publicacion: bloqueantes.length === 0,
+    estado: bloqueantes.length ? "NO_APTO" : advertencias.length ? "APTO_CON_OBSERVACIONES" : "APTO",
+    bloqueantes,
+    advertencias,
+    reglas: [
+      "Debe existir al menos un producto publicado en web.",
+      "No debe haber productos visibles incompletos.",
+      "No debe haber productos cotizados/agregados sin imagen.",
+      "No debe haber códigos sospechosos en productos activos.",
+    ],
+  };
+}
+
+
+router.get(
+  "/admin/catalogo-calidad/cierre",
+  adminQualityAccess,
+  async (req, res, next) => {
+    try {
+      const baseSql = productQualityBaseSql();
+
+      const [summaryRows] = await pool.query(
+        `
+        SELECT
+          COUNT(*) AS total_productos_activos,
+          SUM(CASE WHEN p.activo_web = 1 THEN 1 ELSE 0 END) AS activos_web,
+          SUM(CASE WHEN p.visible_catalogo = 1 THEN 1 ELSE 0 END) AS visibles_catalogo,
+          SUM(CASE WHEN p.activo_web = 1 AND p.visible_catalogo = 1 THEN 1 ELSE 0 END) AS publicados_web,
+          SUM(CASE WHEN ${flagSql.sin_imagen} THEN 1 ELSE 0 END) AS sin_imagen,
+          SUM(CASE WHEN ${flagSql.sin_imagen_principal} THEN 1 ELSE 0 END) AS sin_imagen_principal,
+          SUM(CASE WHEN ${flagSql.sin_thumbnail} THEN 1 ELSE 0 END) AS sin_thumbnail,
+          SUM(CASE WHEN ${flagSql.sin_descripcion_web} THEN 1 ELSE 0 END) AS sin_descripcion_web,
+          SUM(CASE WHEN ${flagSql.sin_cruces} THEN 1 ELSE 0 END) AS sin_cruces,
+          SUM(CASE WHEN ${flagSql.sin_aplicaciones} THEN 1 ELSE 0 END) AS sin_aplicaciones,
+          SUM(CASE WHEN ${flagSql.sin_atributos_buscables} THEN 1 ELSE 0 END) AS sin_atributos_buscables,
+          SUM(CASE WHEN ${flagSql.sin_familia} THEN 1 ELSE 0 END) AS sin_familia,
+          SUM(CASE WHEN ${flagSql.sin_stock} THEN 1 ELSE 0 END) AS sin_stock,
+          SUM(CASE WHEN ${flagSql.sin_precio} THEN 1 ELSE 0 END) AS sin_precio,
+          SUM(CASE WHEN ${flagSql.codigo_sospechoso} THEN 1 ELSE 0 END) AS codigo_sospechoso,
+          SUM(CASE WHEN ${flagSql.visible_incompleto} THEN 1 ELSE 0 END) AS visibles_incompletos,
+          SUM(CASE WHEN ${flagSql.consultado_sin_imagen} THEN 1 ELSE 0 END) AS consultados_sin_imagen,
+          SUM(CASE WHEN ${flagSql.cotizado_sin_imagen} THEN 1 ELSE 0 END) AS cotizados_sin_imagen
+        ${baseSql}
+        WHERE p.activo = 1
+        `
+      );
+
+      const [criticalRows] = await pool.query(
+        `
+        ${productQualitySelectSql()}
+        ${baseSql}
+        WHERE p.activo = 1
+          AND p.activo_web = 1
+          AND p.visible_catalogo = 1
+          AND (${flagSql.visible_incompleto})
+        ORDER BY prioridad_calidad DESC, total_agregados_cotizacion DESC, total_consultas DESC, p.updated_at DESC
+        LIMIT 25
+        `
+      );
+
+      const [manualRows] = await pool.query(
+        `
+        SELECT
+          estado,
+          prioridad,
+          tipo_pendiente,
+          COUNT(*) AS total
+        FROM catalogo_pendientes_comerciales
+        WHERE estado NOT IN ('CERRADO', 'DESCARTADO')
+        GROUP BY estado, prioridad, tipo_pendiente
+        ORDER BY
+          FIELD(prioridad, 'CRITICA', 'ALTA', 'MEDIA', 'BAJA'),
+          total DESC,
+          tipo_pendiente ASC
+        LIMIT 40
+        `
+      );
+
+      const kpis = summaryRows[0] || {};
+      const cierre = buildCatalogCloseStatus(kpis);
+
+      res.json({
+        ok: true,
+        data: {
+          generado_en: new Date().toISOString(),
+          kpis,
+          cierre,
+          productos_criticos: criticalRows,
+          pendientes_manuales: manualRows,
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
 router.get(
   "/admin/catalogo-calidad/resumen",
   adminQualityAccess,
@@ -405,6 +643,10 @@ router.get(
           SUM(CASE WHEN ${flagSql.sin_descripcion_web} THEN 1 ELSE 0 END) AS sin_descripcion_web,
           SUM(CASE WHEN ${flagSql.sin_cruces} THEN 1 ELSE 0 END) AS sin_cruces,
           SUM(CASE WHEN ${flagSql.sin_aplicaciones} THEN 1 ELSE 0 END) AS sin_aplicaciones,
+          SUM(CASE WHEN ${flagSql.sin_atributos_buscables} THEN 1 ELSE 0 END) AS sin_atributos_buscables,
+          SUM(CASE WHEN ${flagSql.sin_familia} THEN 1 ELSE 0 END) AS sin_familia,
+          SUM(CASE WHEN ${flagSql.sin_imagen_principal} THEN 1 ELSE 0 END) AS sin_imagen_principal,
+          SUM(CASE WHEN ${flagSql.sin_thumbnail} THEN 1 ELSE 0 END) AS sin_thumbnail,
           SUM(CASE WHEN ${flagSql.sin_stock} THEN 1 ELSE 0 END) AS sin_stock,
           SUM(CASE WHEN ${flagSql.sin_precio} THEN 1 ELSE 0 END) AS sin_precio,
           SUM(CASE WHEN ${flagSql.codigo_sospechoso} THEN 1 ELSE 0 END) AS codigo_sospechoso,
@@ -427,6 +669,8 @@ router.get(
           SUM(CASE WHEN ${flagSql.sin_descripcion_web} THEN 1 ELSE 0 END) AS sin_descripcion_web,
           SUM(CASE WHEN ${flagSql.sin_cruces} THEN 1 ELSE 0 END) AS sin_cruces,
           SUM(CASE WHEN ${flagSql.sin_aplicaciones} THEN 1 ELSE 0 END) AS sin_aplicaciones,
+          SUM(CASE WHEN ${flagSql.sin_atributos_buscables} THEN 1 ELSE 0 END) AS sin_atributos_buscables,
+          SUM(CASE WHEN ${flagSql.sin_imagen_principal} THEN 1 ELSE 0 END) AS sin_imagen_principal,
           SUM(CASE WHEN ${flagSql.visible_incompleto} THEN 1 ELSE 0 END) AS visibles_incompletos
         ${baseSql}
         WHERE p.activo = 1
@@ -443,6 +687,8 @@ router.get(
           SUM(CASE WHEN ${flagSql.sin_imagen} THEN 1 ELSE 0 END) AS sin_imagen,
           SUM(CASE WHEN ${flagSql.sin_cruces} THEN 1 ELSE 0 END) AS sin_cruces,
           SUM(CASE WHEN ${flagSql.sin_aplicaciones} THEN 1 ELSE 0 END) AS sin_aplicaciones,
+          SUM(CASE WHEN ${flagSql.sin_atributos_buscables} THEN 1 ELSE 0 END) AS sin_atributos_buscables,
+          SUM(CASE WHEN ${flagSql.sin_imagen_principal} THEN 1 ELSE 0 END) AS sin_imagen_principal,
           SUM(CASE WHEN ${flagSql.visible_incompleto} THEN 1 ELSE 0 END) AS visibles_incompletos
         ${baseSql}
         WHERE p.activo = 1
@@ -463,6 +709,10 @@ router.get(
             "SIN_DESCRIPCION_WEB",
             "SIN_CRUCES",
             "SIN_APLICACIONES",
+            "SIN_ATRIBUTOS_BUSCABLES",
+            "SIN_FAMILIA",
+            "SIN_IMAGEN_PRINCIPAL",
+            "SIN_THUMBNAIL",
             "SIN_STOCK",
             "SIN_PRECIO",
             "CODIGO_SOSPECHOSO",

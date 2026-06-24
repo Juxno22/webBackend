@@ -4,15 +4,18 @@ import {
   cleanOldProductionBackups,
   createManualDatabaseBackup,
   createProductionDeployRun,
+  getProductionBackupPolicy,
   getProductionDeployReadiness,
   getProductionDeployRun,
   getProductionDeployTemplate,
   getProductionEnvSnapshot,
   listProductionBackups,
   listProductionDeployRuns,
+  markProductionBackupRestoreTested,
   runProductionChecks,
   updateProductionDeployItem,
   updateProductionDeployRunStatus,
+  validateProductionBackup,
 } from "../services/production.service.js";
 
 const router = express.Router();
@@ -81,7 +84,15 @@ router.get("/admin/produccion/backups", productionAccess, async (req, res, next)
   try {
     const limit = Number(req.query.limit || 50);
     const backups = await listProductionBackups({ limit });
-    res.json({ ok: true, backups });
+    res.json({ ok: true, backups, policy: getProductionBackupPolicy() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/admin/produccion/backups/politica", productionAccess, async (req, res, next) => {
+  try {
+    res.json({ ok: true, policy: getProductionBackupPolicy() });
   } catch (error) {
     next(error);
   }
@@ -100,6 +111,31 @@ router.post("/admin/produccion/backups/manual", productionAccess, async (req, re
 
     const backup = await createManualDatabaseBackup({ admin: req.admin });
     res.json({ ok: true, backup });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/admin/produccion/backups/validar", productionAccess, async (req, res, next) => {
+  try {
+    const result = await validateProductionBackup({
+      id: req.body?.id,
+      filename: req.body?.filename,
+    });
+    res.json({ ok: true, validation: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.patch("/admin/produccion/backups/:id/restauracion-probada", productionAccess, async (req, res, next) => {
+  try {
+    const result = await markProductionBackupRestoreTested({
+      id: req.params.id,
+      payload: req.body || {},
+      admin: req.admin,
+    });
+    res.json({ ok: true, restore_test: result });
   } catch (error) {
     next(error);
   }
