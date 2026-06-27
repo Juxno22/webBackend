@@ -166,6 +166,7 @@ export function buildPreferenceBasePayload({
             failure: urls.failure,
         },
         auto_return: getMercadoPagoAutoReturn(),
+        binary_mode: false,
         statement_descriptor: getMercadoPagoStatementDescriptor(),
         external_reference: venta?.folio || String(venta?.id || ""),
         metadata: {
