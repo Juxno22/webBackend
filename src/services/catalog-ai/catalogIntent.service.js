@@ -668,22 +668,109 @@ function hasApproximateYearLanguage(question) {
   );
 }
 
-function extractMotor(question) {
-  const text = normalizeText(question);
+function formatDetectedMotorLiters(value) {
+  const number = Number(String(value || "").replace(",", "."));
 
-  const decimalMatch = text.match(
-    /\b([0-9]{1}\.[0-9])\s*(L|LT|LTS|LITROS?)?\b/,
+  if (!Number.isFinite(number) || number <= 0) return null;
+
+  return `${number.toFixed(1)}L`;
+}
+
+function formatDetectedCcMotor(value) {
+  const cc = Number(String(value || "").replace(/[^0-9]/g, ""));
+
+  if (!Number.isFinite(cc) || cc < 600 || cc > 9000) return null;
+
+  return formatDetectedMotorLiters(cc / 1000);
+}
+
+function extractMotorCandidateParts(question) {
+  const text = normalizeText(question)
+    .replace(/,/g, ".")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const desplazamientos = [];
+  const cilindrajes = [];
+
+  const decimalMatches = text.matchAll(
+    /\b([0-9]{1,2}\.[0-9])\s*(?:L|LT|LTS|LITRO|LITROS)?\b/g
   );
 
-  if (decimalMatch) {
-    if (hasAmbiguousMotor(question)) return null;
-    return decimalMatch[1];
+  for (const match of decimalMatches) {
+    const motor = formatDetectedMotorLiters(match[1]);
+
+    if (motor) desplazamientos.push(motor);
   }
 
-  const ccMatch =
-    text.match(/\b([0-9]{3,4})\s*CC\b/) || text.match(/\b([0-9]{3,4})CC\b/);
+  const integerLiterMatches = text.matchAll(
+    /\b([0-9]{1,2})\s*(?:L|LT|LTS|LITRO|LITROS)\b/g
+  );
 
-  if (ccMatch) return `${ccMatch[1]} CC`;
+  for (const match of integerLiterMatches) {
+    const motor = formatDetectedMotorLiters(match[1]);
+
+    if (motor) desplazamientos.push(motor);
+  }
+
+  const ccMatches = text.matchAll(/\b([0-9]{3,4})\s*CC\b/g);
+
+  for (const match of ccMatches) {
+    const motor = formatDetectedCcMotor(match[1]);
+
+    if (motor) desplazamientos.push(motor);
+  }
+
+  const cilindrajeMatches = text.matchAll(/\b((?:L|V|H|I|W|B)\s*[0-9]{1,2})\b/g);
+
+  for (const match of cilindrajeMatches) {
+    const value = String(match[1] || "")
+      .toUpperCase()
+      .replace(/\s+/g, "");
+
+    if (value) cilindrajes.push(value);
+  }
+
+  const cylindersMatches = text.matchAll(/\b([3468])\s*CILINDROS?\b/g);
+
+  for (const match of cylindersMatches) {
+    cilindrajes.push(`L${match[1]}`);
+  }
+
+  return {
+    desplazamientos: unique(desplazamientos),
+    cilindrajes: unique(cilindrajes),
+  };
+}
+
+function hasAmbiguousMotorLanguage(question) {
+  const text = normalizeText(question);
+
+  return (
+    /\bNO\s+SE\s+SI\b.*\bMOTOR\b/.test(text) ||
+    /\bNO\s+SÉ\s+SI\b.*\bMOTOR\b/.test(text) ||
+    /\bNO\s+SE\s+SI\s+ES\b/.test(text) ||
+    /\bNO\s+SÉ\s+SI\s+ES\b/.test(text) ||
+    /\bPUEDE\s+SER\b.*\b(O|U)\b/.test(text)
+  );
+}
+
+function extractMotor(question) {
+  const parts = extractMotorCandidateParts(question);
+
+  if (parts.desplazamientos.length > 1) return null;
+
+  if (hasAmbiguousMotorLanguage(question) && parts.desplazamientos.length) {
+    return null;
+  }
+
+  if (parts.desplazamientos.length === 1) {
+    return parts.desplazamientos[0];
+  }
+
+  if (parts.cilindrajes.length === 1) {
+    return parts.cilindrajes[0];
+  }
 
   return null;
 }
@@ -2097,28 +2184,22 @@ export function asksForFutureStock(question) {
   );
 }
 
-function extractMotorCandidates(question) {
-  const text = normalizeText(question);
 
-  const decimalMatches = text.match(/\b[0-9]{1}\.[0-9]\b/g) || [];
-  const ccMatches = text.match(/\b[0-9]{3,4}\s*CC\b/g) || [];
+function extractMotorCandidates(question) {
+  const parts = extractMotorCandidateParts(question);
 
   return unique([
-    ...decimalMatches,
-    ...ccMatches.map((item) => item.replace(/\s+/g, " ")),
+    ...parts.desplazamientos,
+    ...parts.cilindrajes,
   ]);
 }
 
 function hasAmbiguousMotor(question) {
-  const text = normalizeText(question);
-  const candidates = extractMotorCandidates(question);
+  const parts = extractMotorCandidateParts(question);
 
   return (
-    candidates.length > 1 ||
-    /\bNO\s+SE\s+SI\b.*\bMOTOR\b/.test(text) ||
-    /\bNO\s+SÉ\s+SI\b.*\bMOTOR\b/.test(text) ||
-    /\bNO\s+SE\s+SI\s+ES\b/.test(text) ||
-    /\bNO\s+SÉ\s+SI\s+ES\b/.test(text)
+    parts.desplazamientos.length > 1 ||
+    hasAmbiguousMotorLanguage(question)
   );
 }
 

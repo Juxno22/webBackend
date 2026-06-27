@@ -8,12 +8,29 @@ import {
   attributeMatchesMeasurement,
   describeMeasurementFilters,
 } from "./catalogMeasurements.service.js";
+import {
+  buildApplicationMotorLabel,
+  normalizeMotorSearchValue,
+} from "../../utils/applicationMotor.js";
 
 function includesNormalized(haystack, needle) {
   const normalizedHaystack = normalizeSearchQuery(haystack);
   const normalizedNeedle = normalizeSearchQuery(needle);
 
   return Boolean(normalizedNeedle && normalizedHaystack.includes(normalizedNeedle));
+}
+
+function buildApplicationMotorSearchText(app = {}) {
+  return [
+    app.motor,
+    app.cilindraje,
+    app.motor_detalle,
+    app.motor_original,
+    app.motor_label,
+    buildApplicationMotorLabel(app),
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 export function scoreCandidate(row, intent, details) {
@@ -140,13 +157,20 @@ export function scoreCandidate(row, intent, details) {
   }
 
   if (intent.motor) {
-    const motorOk = aplicaciones.some((app) =>
-      includesNormalized(app.motor, intent.motor)
-    );
+    const normalizedMotor = normalizeMotorSearchValue(intent.motor) || intent.motor;
+
+    const motorOk = aplicaciones.some((app) => {
+      const motorText = buildApplicationMotorSearchText(app);
+
+      return (
+        includesNormalized(motorText, normalizedMotor) ||
+        includesNormalized(motorText, intent.motor)
+      );
+    });
 
     if (motorOk) {
       score += 12;
-      reasons.push(`Coincide con motor: ${intent.motor}.`);
+      reasons.push(`Coincide con motor/cilindraje detectado: ${intent.motor}.`);
     }
   }
 
@@ -186,6 +210,10 @@ export function formatCandidate(row, scoreData, details) {
     marca_auto: app.marca_auto,
     modelo_auto: app.modelo_auto,
     motor: app.motor,
+    cilindraje: app.cilindraje,
+    motor_detalle: app.motor_detalle,
+    motor_original: app.motor_original,
+    motor_label: app.motor_label || buildApplicationMotorLabel(app),
     anio_inicio: app.anio_inicio,
     anio_fin: app.anio_fin,
     version_auto: app.version_auto,
@@ -283,6 +311,10 @@ export function productMatchesExcluded(product = {}, intent = {}) {
           app.modelo_auto,
           app.version_auto,
           app.motor,
+          app.cilindraje,
+          app.motor_detalle,
+          app.motor_original,
+          app.motor_label,
         ])
         : []),
       ...(Array.isArray(product.cruces)

@@ -7,6 +7,10 @@ import { pool } from "../config/db.js";
 import { requireAdminAuth, requireRole } from "../middleware/authAdmin.js";
 import { normalizePartNumber, normalizeText } from "../utils/normalize.js";
 import { cleanString, parsePositiveInt, buildPagination } from "../utils/queryHelpers.js";
+import {
+  buildApplicationMotorFromPayload,
+  buildApplicationMotorLabelSql,
+} from "../utils/applicationMotor.js";
 
 const router = Router();
 
@@ -1504,6 +1508,10 @@ router.get("/admin/productos/:id",
           marca_auto,
           modelo_auto,
           motor,
+          cilindraje,
+          motor_detalle,
+          motor_original,
+          ${buildApplicationMotorLabelSql("producto_aplicaciones")} AS motor_label,
           anio_inicio,
           anio_fin,
           version_auto,
@@ -2975,6 +2983,8 @@ router.post("/admin/productos/:id/aplicaciones",
         });
       }
 
+      const motorData = buildApplicationMotorFromPayload(req.body);
+
       const [result] = await pool.query(
         `
         INSERT INTO producto_aplicaciones (
@@ -2982,6 +2992,9 @@ router.post("/admin/productos/:id/aplicaciones",
           marca_auto,
           modelo_auto,
           motor,
+          cilindraje,
+          motor_detalle,
+          motor_original,
           anio_inicio,
           anio_fin,
           version_auto,
@@ -2989,13 +3002,16 @@ router.post("/admin/productos/:id/aplicaciones",
           confianza_extraccion,
           notas
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
         [
           productoId,
           marcaAuto,
           modeloAuto,
-          m63CleanString(req.body.motor),
+          motorData.motor,
+          motorData.cilindraje,
+          motorData.motor_detalle,
+          motorData.motor_original,
           anioInicio,
           anioFin,
           m63CleanString(req.body.version_auto),
@@ -3053,6 +3069,8 @@ router.patch("/admin/productos/:id/aplicaciones/:aplicacionId",
         });
       }
 
+      const motorData = buildApplicationMotorFromPayload(req.body);
+
       const [result] = await pool.query(
         `
         UPDATE producto_aplicaciones
@@ -3060,6 +3078,9 @@ router.patch("/admin/productos/:id/aplicaciones/:aplicacionId",
           marca_auto = ?,
           modelo_auto = ?,
           motor = ?,
+          cilindraje = COALESCE(?, cilindraje),
+          motor_detalle = COALESCE(?, motor_detalle),
+          motor_original = COALESCE(?, motor_original),
           anio_inicio = ?,
           anio_fin = ?,
           version_auto = ?,
@@ -3072,7 +3093,10 @@ router.patch("/admin/productos/:id/aplicaciones/:aplicacionId",
         [
           marcaAuto,
           modeloAuto,
-          m63CleanString(req.body.motor),
+          motorData.motor,
+          motorData.cilindraje,
+          motorData.motor_detalle,
+          motorData.motor_original,
           anioInicio,
           anioFin,
           m63CleanString(req.body.version_auto),

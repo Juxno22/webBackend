@@ -92,6 +92,50 @@ function buildApproxYearText(intent = {}) {
   return `Tomé como referencia ${intent.anios_posibles.join(" o ")} porque el año viene aproximado.`;
 }
 
+function buildRelaxedVehicleSearchText(intent = {}) {
+  const relaxed = intent.busqueda_vehiculo_relajada;
+
+  if (!relaxed?.activa) return "";
+
+  if (relaxed.motivo === "WITHOUT_MOTOR") {
+    return "No encontré coincidencia exacta usando ese motor; abrí la búsqueda sin tomar el motor como filtro duro. Los resultados son sugerencias aproximadas.";
+  }
+
+  if (relaxed.motivo === "WITHOUT_YEAR") {
+    return "No encontré coincidencia exacta usando ese año; abrí la búsqueda sin tomar el año como filtro duro. Los resultados son sugerencias aproximadas.";
+  }
+
+  if (relaxed.motivo === "ONLY_BRAND_MODEL") {
+    return "No encontré coincidencia exacta con todos los datos del vehículo; usé solo marca y modelo para mostrar opciones aproximadas.";
+  }
+
+  if (relaxed.motivo === "PRODUCT_ONLY_WITHOUT_VEHICLE_FILTER") {
+    return "No encontré coincidencia exacta con la aplicación vehicular; abrí la búsqueda solo por pieza. Los resultados son orientativos y deben validarse manualmente.";
+  }
+
+  return "La búsqueda se abrió porque faltó o no coincidió un dato del vehículo. Los resultados son aproximados.";
+}
+
+function buildPartialVehicleWarningText(intent = {}) {
+  const hasVehicleData = Boolean(
+    intent.marca_auto ||
+    intent.modelo_auto ||
+    intent.anio ||
+    intent.motor
+  );
+
+  if (!hasVehicleData) return "";
+
+  const missing = [];
+
+  if (!intent.anio) missing.push("año");
+  if (!intent.motor) missing.push("motor");
+
+  if (!missing.length) return "";
+
+  return `Como falta ${missing.join(" y ")}, estos resultados deben tomarse como sugerencias aproximadas.`;
+}
+
 function buildNoResultsAnswer(intent) {
   const vehicleText = buildVehicleText(intent);
 
@@ -116,6 +160,16 @@ function buildNoResultsAnswer(intent) {
   }
 
   const suggestions = [];
+
+  if (
+    intent.motor_ambiguo &&
+    Array.isArray(intent.motores_posibles) &&
+    intent.motores_posibles.length
+  ) {
+    suggestions.push(
+      `Detecté más de un motor posible: ${intent.motores_posibles.join(", ")}. Confirma cuál es para buscar con más precisión.`
+    );
+  }
 
   if (intent.numero_parte_tokens.length) {
     suggestions.push("El código podría no estar registrado o puede tener una variación.");
@@ -178,6 +232,8 @@ export function buildLocalAnswer({ intent, products }) {
       : "";
 
   const relaxedMeasurementSearch = intent.busqueda_medidas_relajada || null;
+  const relaxedVehicleText = buildRelaxedVehicleSearchText(intent);
+  const partialVehicleWarningText = buildPartialVehicleWarningText(intent);
 
   const relaxedMeasurementText = (() => {
     if (!relaxedMeasurementSearch?.activa) return "";
@@ -226,6 +282,8 @@ export function buildLocalAnswer({ intent, products }) {
 
     return [
       `Encontré ${products.length} opción(es) del catálogo${exclusionText}.`,
+      relaxedVehicleText,
+      partialVehicleWarningText,
       `La primera opción es ${top.codigo_andyfers || top.codigo_importacion}: ${top.descripcion}.`,
       preferenceText,
       conditionText ? `Nota: ${conditionText}` : "",
@@ -267,6 +325,8 @@ export function buildLocalAnswer({ intent, products }) {
 
   return [
     intro,
+    relaxedVehicleText,
+    partialVehicleWarningText,
     relaxedMeasurementText,
     `La opción más fuerte es ${top.codigo_andyfers || top.codigo_importacion}: ${top.descripcion}.`,
     measurementText ? `Tomé como referencia técnica: ${measurementText}.` : "",

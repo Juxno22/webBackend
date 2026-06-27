@@ -1,19 +1,25 @@
 import { Router } from "express";
 import { pool } from "../config/db.js";
 import {
-    normalizePartNumber,
-    normalizeText,
-    normalizeSearchQuery,
-    extractSearchNumbers,
-    getSearchTokens,
-    parsePositiveInt,
-    clampNumber,
+  normalizePartNumber,
+  normalizeText,
+  normalizeSearchQuery,
+  extractSearchNumbers,
+  getSearchTokens,
+  parsePositiveInt,
+  clampNumber,
 } from "../utils/normalize.js";
+import {
+  buildApplicationMotorExactSql,
+  buildApplicationMotorLabelSql,
+  buildApplicationMotorTextSearchSql,
+  normalizeMotorSearchValue,
+} from "../utils/applicationMotor.js";
 
 const router = Router();
 
 function buildValidPublicCodeCondition(alias = "p") {
-    const invalidValues = `
+  const invalidValues = `
     '#N/A',
     'N/A',
     'NA',
@@ -25,7 +31,7 @@ function buildValidPublicCodeCondition(alias = "p") {
     '0'
   `;
 
-    return `
+  return `
     (
       (
         ${alias}.codigo_andyfers IS NOT NULL
@@ -43,7 +49,7 @@ function buildValidPublicCodeCondition(alias = "p") {
 }
 
 function buildVisibleProductCodeSql(alias = "p") {
-    const invalidValues = `
+  const invalidValues = `
     '#N/A',
     'N/A',
     'NA',
@@ -55,7 +61,7 @@ function buildVisibleProductCodeSql(alias = "p") {
     '0'
   `;
 
-    return `
+  return `
     COALESCE(
       CASE
         WHEN ${alias}.codigo_andyfers IS NOT NULL
@@ -74,7 +80,7 @@ function buildVisibleProductCodeSql(alias = "p") {
 }
 
 function buildProductoMultimediaSelectSql(alias = "p") {
-    return `
+  return `
     (
       SELECT pm.thumbnail_url
       FROM producto_multimedia pm
@@ -120,56 +126,56 @@ function buildProductoMultimediaSelectSql(alias = "p") {
 }
 
 function cleanQueryValue(value) {
-    if (value === undefined || value === null) return "";
+  if (value === undefined || value === null) return "";
 
-    return String(value).trim();
+  return String(value).trim();
 };
 
 function buildProductWhere(query) {
-    const conditions = ["p.activo = 1", "p.activo_web = 1"];
-    conditions.push(buildValidPublicCodeCondition("p"));
-    const params = [];
+  const conditions = ["p.activo = 1", "p.activo_web = 1"];
+  conditions.push(buildValidPublicCodeCondition("p"));
+  const params = [];
 
-    if (query.categoria) {
-        conditions.push("c.nombre = ?");
-        params.push(query.categoria);
-    }
+  if (query.categoria) {
+    conditions.push("c.nombre = ?");
+    params.push(query.categoria);
+  }
 
-    if (query.familia) {
-        conditions.push("p.familia = ?");
-        params.push(query.familia);
-    }
+  if (query.familia) {
+    conditions.push("p.familia = ?");
+    params.push(query.familia);
+  }
 
-    if (query.linea) {
-        conditions.push("p.familia = ?");
-        params.push(query.linea);
-    }
+  if (query.linea) {
+    conditions.push("p.familia = ?");
+    params.push(query.linea);
+  }
 
-    if (query.armadora) {
-        conditions.push("p.armadora = ?");
-        params.push(query.armadora);
-    }
+  if (query.armadora) {
+    conditions.push("p.armadora = ?");
+    params.push(query.armadora);
+  }
 
-    if (String(query.nuevo || "") === "1") {
-        conditions.push("p.nuevo_web = 1");
-    }
+  if (String(query.nuevo || "") === "1") {
+    conditions.push("p.nuevo_web = 1");
+  }
 
-    if (query.q) {
-        const q = String(query.q).trim();
-        const terms = getSearchTokens(q);
-        const searchNumbers = extractSearchNumbers(q);
+  if (query.q) {
+    const q = String(query.q).trim();
+    const terms = getSearchTokens(q);
+    const searchNumbers = extractSearchNumbers(q);
 
-        const termClauses = [];
+    const termClauses = [];
 
-        for (const term of terms) {
-            const normalizedTerm = normalizeSearchQuery(term);
-            const normalizedPart = normalizePartNumber(term);
+    for (const term of terms) {
+      const normalizedTerm = normalizeSearchQuery(term);
+      const normalizedPart = normalizePartNumber(term);
 
-            const likeOriginal = `%${term}%`;
-            const likeNormalized = `%${normalizedTerm}%`;
-            const likePart = `%${normalizedPart}%`;
+      const likeOriginal = `%${term}%`;
+      const likeNormalized = `%${normalizedTerm}%`;
+      const likePart = `%${normalizedPart}%`;
 
-            termClauses.push(`
+      termClauses.push(`
       (
         p.codigo_andyfers LIKE ?
         OR p.codigo_andyfers_normalizado LIKE ?
@@ -201,7 +207,7 @@ function buildProductWhere(query) {
             AND (
               pa.marca_auto LIKE ?
               OR pa.modelo_auto LIKE ?
-              OR pa.motor LIKE ?
+              OR ${buildApplicationMotorTextSearchSql("pa")}
               OR pa.version_auto LIKE ?
               OR pa.notas LIKE ?
             )
@@ -243,43 +249,52 @@ function buildProductWhere(query) {
       )
     `);
 
-            params.push(
-                likeOriginal,
-                likePart,
-                likeOriginal,
-                likeOriginal,
-                likeOriginal,
-                likeNormalized,
-                likeOriginal,
-                likeNormalized,
-                likeOriginal,
-                likeNormalized,
+      params.push(
+        // productos / categoría
+        likeOriginal,   // p.codigo_andyfers
+        likePart,       // p.codigo_andyfers_normalizado
+        likeOriginal,   // p.codigo_importacion
+        likeOriginal,   // p.armadora
+        likeOriginal,   // p.familia
+        likeNormalized, // p.familia
+        likeOriginal,   // p.descripcion
+        likeNormalized, // p.descripcion
+        likeOriginal,   // c.nombre
+        likeNormalized, // c.nombre
 
-                likeOriginal,
-                likePart,
-                likeOriginal,
+        // cruces
+        likeOriginal,   // pc.numero_parte
+        likePart,       // pc.numero_parte_normalizado
+        likeOriginal,   // mc.nombre
 
-                likeOriginal,
-                likeOriginal,
-                likeOriginal,
-                likeOriginal,
-                likeOriginal,
+        // aplicaciones
+        likeOriginal,   // pa.marca_auto
+        likeOriginal,   // pa.modelo_auto
+        likeOriginal,   // pa.motor
+        likeOriginal,   // pa.cilindraje
+        likeOriginal,   // pa.motor_detalle
+        likeOriginal,   // pa.motor_original
+        likeOriginal,   // motor_label
+        likeOriginal,   // pa.version_auto
+        likeOriginal,   // pa.notas
 
-                likeOriginal,
-                likeNormalized,
-                likeOriginal,
-                likeNormalized,
-                likeNormalized,
+        // atributos
+        likeOriginal,   // pat.atributo
+        likeNormalized, // pat.atributo_normalizado
+        likeOriginal,   // pat.valor_texto
+        likeNormalized, // pat.valor_normalizado
+        likeNormalized, // CONCAT(...)
 
-                likeOriginal,
-                likeNormalized
-            );
-        }
+        // sinónimos
+        likeOriginal,   // sb.texto_usuario
+        likeNormalized  // sb.texto_normalizado
+      );
+    }
 
-        const numberClauses = [];
+    const numberClauses = [];
 
-        for (const number of searchNumbers) {
-            numberClauses.push(`
+    for (const number of searchNumbers) {
+      numberClauses.push(`
       EXISTS (
         SELECT 1
         FROM producto_atributos pat_num
@@ -289,64 +304,67 @@ function buildProductWhere(query) {
       )
     `);
 
-            params.push(number - 0.5, number + 0.5);
-        }
+      params.push(number - 0.5, number + 0.5);
+    }
 
-        const searchClauses = [...termClauses, ...numberClauses];
+    const searchClauses = [...termClauses, ...numberClauses];
 
-        if (searchClauses.length > 0) {
-            conditions.push(`
+    if (searchClauses.length > 0) {
+      conditions.push(`
       (
         ${searchClauses.join(" OR ")}
       )
     `);
-        }
+    }
+  }
+
+  const hasVehicleFilter =
+    query.anio || query.marca_auto || query.modelo_auto || query.motor;
+
+  if (hasVehicleFilter) {
+    const vehicleConditions = ["pa.producto_id = p.id"];
+
+    if (query.anio) {
+      vehicleConditions.push("? BETWEEN pa.anio_inicio AND pa.anio_fin");
+      params.push(Number(query.anio));
     }
 
-    const hasVehicleFilter =
-        query.anio || query.marca_auto || query.modelo_auto || query.motor;
+    if (query.marca_auto) {
+      vehicleConditions.push("pa.marca_auto = ?");
+      params.push(query.marca_auto);
+    }
 
-    if (hasVehicleFilter) {
-        const vehicleConditions = ["pa.producto_id = p.id"];
+    if (query.modelo_auto) {
+      vehicleConditions.push("pa.modelo_auto = ?");
+      params.push(query.modelo_auto);
+    }
 
-        if (query.anio) {
-            vehicleConditions.push("? BETWEEN pa.anio_inicio AND pa.anio_fin");
-            params.push(Number(query.anio));
-        }
+    if (query.motor) {
+      const motor = cleanQueryValue(query.motor);
+      const normalizedMotor = normalizeMotorSearchValue(motor) || motor;
 
-        if (query.marca_auto) {
-            vehicleConditions.push("pa.marca_auto = ?");
-            params.push(query.marca_auto);
-        }
+      vehicleConditions.push(buildApplicationMotorExactSql("pa"));
+      params.push(normalizedMotor, motor, motor);
+    }
 
-        if (query.modelo_auto) {
-            vehicleConditions.push("pa.modelo_auto = ?");
-            params.push(query.modelo_auto);
-        }
-
-        if (query.motor) {
-            vehicleConditions.push("pa.motor = ?");
-            params.push(query.motor);
-        }
-
-        conditions.push(`
+    conditions.push(`
             EXISTS (
                 SELECT 1
                 FROM producto_aplicaciones pa
                 WHERE ${vehicleConditions.join(" AND ")}
             )
         `);
-    }
+  }
 
-    return {
-        whereSql: conditions.length ? `WHERE ${conditions.join(" AND ")}` : "",
-        params,
-    };
+  return {
+    whereSql: conditions.length ? `WHERE ${conditions.join(" AND ")}` : "",
+    params,
+  };
 }
 
 router.get("/categorias", async (req, res, next) => {
-    try {
-        const [rows] = await pool.query(`
+  try {
+    const [rows] = await pool.query(`
       SELECT
         c.id,
         c.nombre,
@@ -362,18 +380,18 @@ router.get("/categorias", async (req, res, next) => {
       ORDER BY c.nombre ASC
     `);
 
-        res.json({
-            ok: true,
-            data: rows,
-        });
-    } catch (error) {
-        next(error);
-    }
+    res.json({
+      ok: true,
+      data: rows,
+    });
+  } catch (error) {
+    next(error);
+  }
 });
 
 router.get("/familias", async (req, res, next) => {
-    try {
-        const [rows] = await pool.query(`
+  try {
+    const [rows] = await pool.query(`
       SELECT
         p.familia,
         COUNT(*) AS total_productos
@@ -386,18 +404,18 @@ router.get("/familias", async (req, res, next) => {
       ORDER BY p.familia ASC
     `);
 
-        res.json({
-            ok: true,
-            data: rows,
-        });
-    } catch (error) {
-        next(error);
-    }
+    res.json({
+      ok: true,
+      data: rows,
+    });
+  } catch (error) {
+    next(error);
+  }
 });
 
 router.get("/armadoras", async (req, res, next) => {
-    try {
-        const [rows] = await pool.query(`
+  try {
+    const [rows] = await pool.query(`
       SELECT
         p.armadora,
         COUNT(*) AS total_productos
@@ -410,13 +428,13 @@ router.get("/armadoras", async (req, res, next) => {
       ORDER BY p.armadora ASC
     `);
 
-        res.json({
-            ok: true,
-            data: rows,
-        });
-    } catch (error) {
-        next(error);
-    }
+    res.json({
+      ok: true,
+      data: rows,
+    });
+  } catch (error) {
+    next(error);
+  }
 });
 
 router.get("/productos/destacados", async (req, res, next) => {
@@ -485,8 +503,8 @@ router.get("/productos/destacados", async (req, res, next) => {
 });
 
 router.get("/vehiculos/anios", async (req, res, next) => {
-    try {
-        const [rows] = await pool.query(`
+  try {
+    const [rows] = await pool.query(`
       SELECT
         pa.anio_inicio,
         pa.anio_fin
@@ -500,45 +518,45 @@ router.get("/vehiculos/anios", async (req, res, next) => {
         AND pa.anio_fin BETWEEN 1900 AND 2100
     `);
 
-        const years = new Set();
+    const years = new Set();
 
-        rows.forEach((row) => {
-            const start = Number(row.anio_inicio);
-            const end = Number(row.anio_fin);
+    rows.forEach((row) => {
+      const start = Number(row.anio_inicio);
+      const end = Number(row.anio_fin);
 
-            if (!Number.isFinite(start) || !Number.isFinite(end)) return;
+      if (!Number.isFinite(start) || !Number.isFinite(end)) return;
 
-            for (let year = start; year <= end; year++) {
-                years.add(year);
-            }
-        });
+      for (let year = start; year <= end; year++) {
+        years.add(year);
+      }
+    });
 
-        const data = Array.from(years)
-            .sort((a, b) => b - a)
-            .map((anio) => ({ anio }));
+    const data = Array.from(years)
+      .sort((a, b) => b - a)
+      .map((anio) => ({ anio }));
 
-        res.json({
-            ok: true,
-            data,
-        });
-    } catch (error) {
-        next(error);
-    }
+    res.json({
+      ok: true,
+      data,
+    });
+  } catch (error) {
+    next(error);
+  }
 });
 
 router.get("/vehiculos/marcas", async (req, res, next) => {
-    try {
-        const anio = Number(req.query.anio);
+  try {
+    const anio = Number(req.query.anio);
 
-        if (!anio) {
-            return res.status(400).json({
-                ok: false,
-                error: "El año es obligatorio.",
-            });
-        }
+    if (!anio) {
+      return res.status(400).json({
+        ok: false,
+        error: "El año es obligatorio.",
+      });
+    }
 
-        const [rows] = await pool.query(
-            `
+    const [rows] = await pool.query(
+      `
       SELECT DISTINCT
         pa.marca_auto AS marca
       FROM producto_aplicaciones pa
@@ -550,32 +568,32 @@ router.get("/vehiculos/marcas", async (req, res, next) => {
         AND pa.marca_auto <> ''
       ORDER BY pa.marca_auto ASC
       `,
-            [anio]
-        );
+      [anio]
+    );
 
-        res.json({
-            ok: true,
-            data: rows,
-        });
-    } catch (error) {
-        next(error);
-    }
+    res.json({
+      ok: true,
+      data: rows,
+    });
+  } catch (error) {
+    next(error);
+  }
 });
 
 router.get("/vehiculos/modelos", async (req, res, next) => {
-    try {
-        const anio = Number(req.query.anio);
-        const marca = cleanQueryValue(req.query.marca);
+  try {
+    const anio = Number(req.query.anio);
+    const marca = cleanQueryValue(req.query.marca);
 
-        if (!anio || !marca) {
-            return res.status(400).json({
-                ok: false,
-                error: "El año y la marca son obligatorios.",
-            });
-        }
+    if (!anio || !marca) {
+      return res.status(400).json({
+        ok: false,
+        error: "El año y la marca son obligatorios.",
+      });
+    }
 
-        const [rows] = await pool.query(
-            `
+    const [rows] = await pool.query(
+      `
       SELECT DISTINCT
         pa.modelo_auto AS modelo
       FROM producto_aplicaciones pa
@@ -588,35 +606,59 @@ router.get("/vehiculos/modelos", async (req, res, next) => {
         AND pa.modelo_auto <> ''
       ORDER BY pa.modelo_auto ASC
       `,
-            [anio, marca]
-        );
+      [anio, marca]
+    );
 
-        res.json({
-            ok: true,
-            data: rows,
-        });
-    } catch (error) {
-        next(error);
-    }
+    res.json({
+      ok: true,
+      data: rows,
+    });
+  } catch (error) {
+    next(error);
+  }
 });
 
 router.get("/vehiculos/motores", async (req, res, next) => {
-    try {
-        const anio = Number(req.query.anio);
-        const marca = cleanQueryValue(req.query.marca);
-        const modelo = cleanQueryValue(req.query.modelo);
+  try {
+    const anio = Number(req.query.anio);
+    const marca = cleanQueryValue(req.query.marca);
+    const modelo = cleanQueryValue(req.query.modelo);
 
-        if (!anio || !marca || !modelo) {
-            return res.status(400).json({
-                ok: false,
-                error: "El año, marca y modelo son obligatorios.",
-            });
-        }
+    if (!anio || !marca || !modelo) {
+      return res.status(400).json({
+        ok: false,
+        error: "El año, marca y modelo son obligatorios.",
+      });
+    }
 
-        const [rows] = await pool.query(
-            `
-      SELECT DISTINCT
-        pa.motor
+    const [rows] = await pool.query(
+      `
+      SELECT
+        pa.motor,
+        GROUP_CONCAT(
+          DISTINCT NULLIF(TRIM(pa.cilindraje), '')
+          ORDER BY pa.cilindraje ASC
+          SEPARATOR ', '
+        ) AS cilindraje,
+        GROUP_CONCAT(
+          DISTINCT NULLIF(TRIM(pa.motor_detalle), '')
+          ORDER BY pa.motor_detalle ASC
+          SEPARATOR ', '
+        ) AS motor_detalle,
+        CONCAT_WS(
+          ' · ',
+          NULLIF(TRIM(pa.motor), ''),
+          GROUP_CONCAT(
+            DISTINCT NULLIF(TRIM(pa.cilindraje), '')
+            ORDER BY pa.cilindraje ASC
+            SEPARATOR ', '
+          ),
+          GROUP_CONCAT(
+            DISTINCT NULLIF(TRIM(pa.motor_detalle), '')
+            ORDER BY pa.motor_detalle ASC
+            SEPARATOR ', '
+          )
+        ) AS motor_label
       FROM producto_aplicaciones pa
       JOIN productos p ON p.id = pa.producto_id
       WHERE p.activo = 1
@@ -625,37 +667,40 @@ router.get("/vehiculos/motores", async (req, res, next) => {
         AND pa.marca_auto = ?
         AND pa.modelo_auto = ?
         AND pa.motor IS NOT NULL
-        AND pa.motor <> ''
-      ORDER BY pa.motor ASC
+        AND TRIM(pa.motor) <> ''
+      GROUP BY pa.motor
+      ORDER BY
+        CAST(REPLACE(UPPER(pa.motor), 'L', '') AS DECIMAL(10, 2)) ASC,
+        pa.motor ASC
       `,
-            [anio, marca, modelo]
-        );
+      [anio, marca, modelo]
+    );
 
-        res.json({
-            ok: true,
-            data: rows,
-        });
-    } catch (error) {
-        next(error);
-    }
+    res.json({
+      ok: true,
+      data: rows,
+    });
+  } catch (error) {
+    next(error);
+  }
 });
 
 router.get("/vehiculos/lineas", async (req, res, next) => {
-    try {
-        const anio = Number(req.query.anio);
-        const marca = cleanQueryValue(req.query.marca);
-        const modelo = cleanQueryValue(req.query.modelo);
-        const motor = cleanQueryValue(req.query.motor);
+  try {
+    const anio = Number(req.query.anio);
+    const marca = cleanQueryValue(req.query.marca);
+    const modelo = cleanQueryValue(req.query.modelo);
+    const motor = cleanQueryValue(req.query.motor);
 
-        if (!anio || !marca || !modelo || !motor) {
-            return res.status(400).json({
-                ok: false,
-                error: "El año, marca, modelo y motor son obligatorios.",
-            });
-        }
+    if (!anio || !marca || !modelo || !motor) {
+      return res.status(400).json({
+        ok: false,
+        error: "El año, marca, modelo y motor son obligatorios.",
+      });
+    }
 
-        const [rows] = await pool.query(
-            `
+    const [rows] = await pool.query(
+      `
       SELECT
         p.familia AS linea,
         COUNT(DISTINCT p.id) AS total_productos
@@ -666,46 +711,46 @@ router.get("/vehiculos/lineas", async (req, res, next) => {
         AND ? BETWEEN pa.anio_inicio AND pa.anio_fin
         AND pa.marca_auto = ?
         AND pa.modelo_auto = ?
-        AND pa.motor = ?
+        AND ${buildApplicationMotorExactSql("pa")}
         AND p.familia IS NOT NULL
         AND p.familia <> ''
       GROUP BY p.familia
       ORDER BY p.familia ASC
       `,
-            [anio, marca, modelo, motor]
-        );
+      [anio, marca, modelo, normalizeMotorSearchValue(motor) || motor, motor, motor]
+    );
 
-        res.json({
-            ok: true,
-            data: rows,
-        });
-    } catch (error) {
-        next(error);
-    }
+    res.json({
+      ok: true,
+      data: rows,
+    });
+  } catch (error) {
+    next(error);
+  }
 });
 
 router.get("/productos", async (req, res, next) => {
-    try {
-        const page = parsePositiveInt(req.query.page, 1);
-        const limit = clampNumber(parsePositiveInt(req.query.limit, 12), 1, 60);
-        const offset = (page - 1) * limit;
+  try {
+    const page = parsePositiveInt(req.query.page, 1);
+    const limit = clampNumber(parsePositiveInt(req.query.limit, 12), 1, 60);
+    const offset = (page - 1) * limit;
 
-        const { whereSql, params } = buildProductWhere(req.query);
+    const { whereSql, params } = buildProductWhere(req.query);
 
-        const [countRows] = await pool.query(
-            `
+    const [countRows] = await pool.query(
+      `
       SELECT COUNT(DISTINCT p.id) AS total
       FROM productos p
       JOIN categorias c ON c.id = p.categoria_id
       ${whereSql}
       `,
-            params,
-        );
+      params,
+    );
 
-        const total = Number(countRows?.[0]?.total || 0);
+    const total = Number(countRows?.[0]?.total || 0);
 
-        const [rows] = await pool.query(
-            `
+    const [rows] = await pool.query(
+      `
       SELECT
         p.id,
         p.codigo_andyfers,
@@ -755,48 +800,48 @@ router.get("/productos", async (req, res, next) => {
         p.id ASC
       LIMIT ? OFFSET ?
       `,
-            [...params, limit, offset],
-        );
+      [...params, limit, offset],
+    );
 
-        res.json({
-            ok: true,
-            data: rows,
-            pagination: {
-                page,
-                limit,
-                total,
-                total_pages: Math.ceil(total / limit),
-            },
-            filters: {
-                q: req.query.q || "",
-                categoria: req.query.categoria || "",
-                familia: req.query.familia || "",
-                armadora: req.query.armadora || "",
-            },
-        });
-    } catch (error) {
-        next(error);
-    }
+    res.json({
+      ok: true,
+      data: rows,
+      pagination: {
+        page,
+        limit,
+        total,
+        total_pages: Math.ceil(total / limit),
+      },
+      filters: {
+        q: req.query.q || "",
+        categoria: req.query.categoria || "",
+        familia: req.query.familia || "",
+        armadora: req.query.armadora || "",
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
 });
 
 router.get("/buscar/sugerencias", async (req, res, next) => {
-    try {
-        const q = String(req.query.q || "").trim();
+  try {
+    const q = String(req.query.q || "").trim();
 
-        if (q.length < 2) {
-            return res.json({
-                ok: true,
-                data: [],
-            });
-        }
+    if (q.length < 2) {
+      return res.json({
+        ok: true,
+        data: [],
+      });
+    }
 
-        const qNormalized = normalizeSearchQuery(q);
-        const normalizedPart = normalizePartNumber(q);
-        const like = `%${q}%`;
-        const likeNormalized = `%${qNormalized}%`;
+    const qNormalized = normalizeSearchQuery(q);
+    const normalizedPart = normalizePartNumber(q);
+    const like = `%${q}%`;
+    const likeNormalized = `%${qNormalized}%`;
 
-        const [rows] = await pool.query(
-            `
+    const [rows] = await pool.query(
+      `
       SELECT
         sugerencia,
         tipo,
@@ -854,32 +899,32 @@ router.get("/buscar/sugerencias", async (req, res, next) => {
       ORDER BY total DESC, sugerencia ASC
       LIMIT 12
       `,
-            [
-                like,
-                like,
-                like,
-                `%${normalizedPart}%`,
-                likeNormalized,
-                likeNormalized,
-            ]
-        );
+      [
+        like,
+        like,
+        like,
+        `%${normalizedPart}%`,
+        likeNormalized,
+        likeNormalized,
+      ]
+    );
 
-        res.json({
-            ok: true,
-            data: rows,
-        });
-    } catch (error) {
-        next(error);
-    }
+    res.json({
+      ok: true,
+      data: rows,
+    });
+  } catch (error) {
+    next(error);
+  }
 });
 
 router.get("/productos/:codigo", async (req, res, next) => {
-    try {
-        const codigo = String(req.params.codigo || "").trim();
-        const codigoNormalizado = normalizePartNumber(codigo);
+  try {
+    const codigo = String(req.params.codigo || "").trim();
+    const codigoNormalizado = normalizePartNumber(codigo);
 
-        const [productos] = await pool.query(
-            `
+    const [productos] = await pool.query(
+      `
       SELECT
         p.id,
         p.codigo_andyfers,
@@ -927,20 +972,20 @@ router.get("/productos/:codigo", async (req, res, next) => {
         p.activo
       LIMIT 1
       `,
-            [codigo, codigoNormalizado, codigo]
-        );
+      [codigo, codigoNormalizado, codigo]
+    );
 
-        const producto = productos?.[0];
+    const producto = productos?.[0];
 
-        if (!producto) {
-            return res.status(404).json({
-                ok: false,
-                error: "Producto no encontrado",
-            });
-        }
+    if (!producto) {
+      return res.status(404).json({
+        ok: false,
+        error: "Producto no encontrado",
+      });
+    }
 
-        const [cruces] = await pool.query(
-            `
+    const [cruces] = await pool.query(
+      `
       SELECT
         pc.id,
         mc.nombre AS marca,
@@ -951,16 +996,20 @@ router.get("/productos/:codigo", async (req, res, next) => {
       WHERE pc.producto_id = ?
       ORDER BY mc.nombre ASC, pc.numero_parte ASC
       `,
-            [producto.id]
-        );
+      [producto.id]
+    );
 
-        const [aplicaciones] = await pool.query(
-            `
+    const [aplicaciones] = await pool.query(
+      `
       SELECT
         id,
         marca_auto,
         modelo_auto,
         motor,
+        cilindraje,
+        motor_detalle,
+        motor_original,
+        ${buildApplicationMotorLabelSql("producto_aplicaciones")} AS motor_label,
         anio_inicio,
         anio_fin,
         version_auto,
@@ -971,11 +1020,11 @@ router.get("/productos/:codigo", async (req, res, next) => {
       WHERE producto_id = ?
       ORDER BY marca_auto ASC, modelo_auto ASC, anio_inicio ASC
       `,
-            [producto.id]
-        );
+      [producto.id]
+    );
 
-        const [relaciones] = await pool.query(
-            `
+    const [relaciones] = await pool.query(
+      `
       SELECT
         id,
         tipo_relacion,
@@ -985,11 +1034,11 @@ router.get("/productos/:codigo", async (req, res, next) => {
       WHERE producto_id = ?
       ORDER BY tipo_relacion ASC, codigo_relacionado ASC
       `,
-            [producto.id]
-        );
+      [producto.id]
+    );
 
-        const [inventario] = await pool.query(
-            `
+    const [inventario] = await pool.query(
+      `
       SELECT
         i.id,
         s.nombre AS sucursal,
@@ -1002,10 +1051,10 @@ router.get("/productos/:codigo", async (req, res, next) => {
       WHERE i.producto_id = ?
       ORDER BY s.nombre ASC
       `,
-            [producto.id]
-        );
-        const [atributos] = await pool.query(
-            `
+      [producto.id]
+    );
+    const [atributos] = await pool.query(
+      `
             SELECT
                 id,
                 atributo,
@@ -1020,11 +1069,11 @@ router.get("/productos/:codigo", async (req, res, next) => {
                 AND visible_web = 1
             ORDER BY orden ASC, atributo ASC
             `,
-            [producto.id]
-        );
+      [producto.id]
+    );
 
-        const [multimedia] = await pool.query(
-            `
+    const [multimedia] = await pool.query(
+      `
             SELECT
                 id,
                 tipo,
@@ -1049,38 +1098,38 @@ router.get("/productos/:codigo", async (req, res, next) => {
                 orden ASC,
                 id ASC
             `,
-            [producto.id]
-        );
+      [producto.id]
+    );
 
-        const imagenes = multimedia.filter((item) => item.tipo === "IMAGEN");
-        const videos = multimedia.filter((item) => item.tipo === "VIDEO");
+    const imagenes = multimedia.filter((item) => item.tipo === "IMAGEN");
+    const videos = multimedia.filter((item) => item.tipo === "VIDEO");
 
-        const imagenPrincipal =
-            imagenes.find((item) => item.rol === "PRINCIPAL") ||
-            imagenes[0] ||
-            null;
+    const imagenPrincipal =
+      imagenes.find((item) => item.rol === "PRINCIPAL") ||
+      imagenes[0] ||
+      null;
 
-        const galeria = imagenes.filter((item) => item.id !== imagenPrincipal?.id);
-        const videoPrincipal = videos[0] || null;
+    const galeria = imagenes.filter((item) => item.id !== imagenPrincipal?.id);
+    const videoPrincipal = videos[0] || null;
 
-        res.json({
-            ok: true,
-            data: {
-                ...producto,
-                cruces,
-                aplicaciones,
-                relaciones,
-                inventario,
-                atributos,
-                multimedia,
-                imagen_principal: imagenPrincipal,
-                galeria,
-                video_principal: videoPrincipal,
-            },
-        });
-    } catch (error) {
-        next(error);
-    }
+    res.json({
+      ok: true,
+      data: {
+        ...producto,
+        cruces,
+        aplicaciones,
+        relaciones,
+        inventario,
+        atributos,
+        multimedia,
+        imagen_principal: imagenPrincipal,
+        galeria,
+        video_principal: videoPrincipal,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
 });
 
 export default router;

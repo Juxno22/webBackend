@@ -2,6 +2,11 @@ import { pool } from "../../config/db.js";
 import { normalizeText } from "../../utils/normalize.js";
 import { getMeasurementAttributeAliases } from "./catalogMeasurements.service.js";
 import { isValidPublicCode } from "./catalogUtils.service.js";
+import {
+  buildApplicationMotorLabelSql,
+  buildApplicationMotorTextSearchSql,
+  normalizeMotorSearchValue,
+} from "../../utils/applicationMotor.js";
 
 export function buildCandidateWhere(intent) {
   const conditions = [
@@ -112,8 +117,17 @@ export function buildCandidateWhere(intent) {
   }
 
   if (intent.motor) {
-    vehicleConditions.push("UPPER(COALESCE(pa.motor, '')) LIKE ?");
-    params.push(`%${normalizeText(intent.motor)}%`);
+    const motorText = normalizeText(intent.motor);
+    const normalizedMotor = normalizeMotorSearchValue(intent.motor) || motorText;
+
+    vehicleConditions.push(buildApplicationMotorTextSearchSql("pa"));
+    params.push(
+      `%${normalizedMotor}%`,
+      `%${motorText}%`,
+      `%${motorText}%`,
+      `%${motorText}%`,
+      `%${motorText}%`
+    );
   }
 
   if (intent.anio) {
@@ -369,7 +383,7 @@ function buildRelaxedMeasurementSearchVariants(intent = {}) {
       },
     });
   }
-  
+
   variants.push({
     reason: "PRODUCT_ONLY_WITHOUT_MEASUREMENT_FILTERS",
     label: "pieza sin filtro duro de medidas",
@@ -410,6 +424,103 @@ function markRelaxedMeasurementSearch(intent = {}, variant = {}) {
     medidas_originales: Array.isArray(intent.medidas_detectadas)
       ? intent.medidas_detectadas
       : [],
+  };
+}
+
+function hasSearchableProductIntent(intent = {}) {
+  return Boolean(
+    (Array.isArray(intent.numero_parte_tokens) && intent.numero_parte_tokens.length) ||
+    (Array.isArray(intent.product_query_tokens) && intent.product_query_tokens.length) ||
+    (Array.isArray(intent.strict_product_family_tokens) && intent.strict_product_family_tokens.length) ||
+    (Array.isArray(intent.terminos_producto_detectados) && intent.terminos_producto_detectados.length) ||
+    (Array.isArray(intent.medidas_detectadas) && intent.medidas_detectadas.length)
+  );
+}
+
+function buildRelaxedVehicleSearchVariants(intent = {}) {
+  if (!hasVehicleFilters(intent) || !hasSearchableProductIntent(intent)) {
+    return [];
+  }
+
+  const variants = [];
+
+  if (intent.motor) {
+    variants.push({
+      reason: "WITHOUT_MOTOR",
+      label: "sin usar motor como filtro duro",
+      relaxedFields: ["motor"],
+      intent: {
+        ...intent,
+        motor: null,
+        motor_ambiguo: false,
+      },
+    });
+  }
+
+  if (intent.anio) {
+    variants.push({
+      reason: "WITHOUT_YEAR",
+      label: "sin usar año como filtro duro",
+      relaxedFields: ["anio"],
+      intent: {
+        ...intent,
+        anio: null,
+        anios_posibles: [],
+        anio_aproximado: true,
+      },
+    });
+  }
+
+  if (intent.motor || intent.anio) {
+    variants.push({
+      reason: "ONLY_BRAND_MODEL",
+      label: "solo con marca y modelo",
+      relaxedFields: ["motor", "anio"],
+      intent: {
+        ...intent,
+        motor: null,
+        anio: null,
+        motores_posibles: [],
+        anios_posibles: [],
+        motor_ambiguo: false,
+        anio_aproximado: true,
+      },
+    });
+  }
+
+  variants.push({
+    reason: "PRODUCT_ONLY_WITHOUT_VEHICLE_FILTER",
+    label: "solo por pieza sin filtro duro de vehículo",
+    relaxedFields: ["marca_auto", "modelo_auto", "anio", "motor"],
+    intent: {
+      ...intent,
+      marca_auto: null,
+      modelo_auto: null,
+      anio: null,
+      motor: null,
+      motores_posibles: [],
+      anios_posibles: [],
+      motor_ambiguo: false,
+      anio_aproximado: true,
+    },
+  });
+
+  return variants;
+}
+
+function markRelaxedVehicleSearch(intent = {}, variant = {}) {
+  intent.busqueda_vehiculo_relajada = {
+    activa: true,
+    motivo: variant.reason,
+    etiqueta: variant.label,
+    campos_relajados: variant.relaxedFields || [],
+    vehiculo_original: {
+      marca_auto: intent.marca_auto || null,
+      modelo_auto: intent.modelo_auto || null,
+      anio: intent.anio || null,
+      motor: intent.motor || null,
+      motores_posibles: intent.motores_posibles || [],
+    },
   };
 }
 
@@ -476,6 +587,22 @@ export async function searchCandidates(intent) {
     return strictRows;
   }
 
+  const vehicleVariants = buildRelaxedVehicleSearchVariants(intent);
+
+  for (const variant of vehicleVariants) {
+    const relaxedRows = await runCandidateQuery(variant.intent);
+
+    if (relaxedRows.length > 0) {
+      markRelaxedVehicleSearch(intent, variant);
+
+      return relaxedRows.map((row) => ({
+        ...row,
+        busqueda_relajada_vehiculo: true,
+        razon_busqueda_relajada_vehiculo: variant.reason,
+      }));
+    }
+  }
+
   const hasMeasurements =
     Array.isArray(intent.medidas_detectadas) &&
     intent.medidas_detectadas.some(isNumericMeasurement);
@@ -516,7 +643,18 @@ export async function getCandidateDetails(productIds) {
 
   const [aplicaciones] = await pool.query(
     `
-    SELECT producto_id, marca_auto, modelo_auto, motor, anio_inicio, anio_fin, version_auto
+    SELECT
+    producto_id,
+    marca_auto,
+    modelo_auto,
+    motor,
+    cilindraje,
+    motor_detalle,
+    motor_original,
+    ${buildApplicationMotorLabelSql("producto_aplicaciones")} AS motor_label,
+    anio_inicio,
+    anio_fin,
+    version_auto
     FROM producto_aplicaciones
     WHERE producto_id IN (${placeholders})
     ORDER BY producto_id, marca_auto, modelo_auto, anio_inicio
