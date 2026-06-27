@@ -2328,11 +2328,6 @@ const SEMANTIC_PRODUCT_MAP = {
     product: ["TERMOSTATO", "TERMOSTATOS"],
     strict: ["TERMOSTATO", "TERMOSTATOS"],
   },
-  RADIADOR: {
-    direct: ["RADIADOR"],
-    product: ["RADIADOR", "RADIADORES"],
-    strict: ["RADIADOR", "RADIADORES"],
-  },
   MANGUERA: {
     direct: ["MANGUERA"],
     product: ["MANGUERA", "MANGUERAS"],

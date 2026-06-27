@@ -139,7 +139,7 @@ function buildPartialVehicleWarningText(intent = {}) {
 function buildNoResultsAnswer(intent) {
   const vehicleText = buildVehicleText(intent);
 
-  if (requestedRadiator(intent)) {
+  /*if (requestedRadiator(intent)) {
     return [
       vehicleText
         ? `No encontré radiadores cargados o coincidencias visibles en catálogo para ${vehicleText}.`
@@ -147,7 +147,7 @@ function buildNoResultsAnswer(intent) {
       "Los datos del vehículo sí se detectaron; por ahora esa familia puede no estar cargada en la base o no tiene aplicación visible.",
       "Ventas puede validarlo manualmente con código, medida, muestra física o foto de la pieza.",
     ].join(" ");
-  }
+  }*/
 
   if (requestedUpperHose(intent)) {
     return [
