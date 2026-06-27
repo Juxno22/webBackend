@@ -6,10 +6,22 @@ export const ANALYTICS_EVENTOS_VALIDOS = new Set([
   "BUSQUEDA_CATALOGO_SIN_RESULTADO",
   "BUSQUEDA_IA",
   "BUSQUEDA_IA_SIN_RESULTADO",
+
   "PRODUCTO_CONSULTADO",
+
+  // Cotización
   "PRODUCTO_AGREGADO_CARRITO",
   "PRODUCTO_AGREGADO_COTIZACION",
   "COTIZACION_GENERADA",
+
+  // Venta ecommerce
+  "PRODUCTO_AGREGADO_CARRITO_VENTA",
+  "VENTA_CHECKOUT_CREADO",
+  "VENTA_PAGO_PENDIENTE",
+  "VENTA_PAGO_APROBADO",
+  "VENTA_PAGO_RECHAZADO",
+  "VENTA_ENTREGADA",
+
   "WHATSAPP_CLICK",
   "CONTACTO_FORMULARIO",
 ]);
@@ -296,7 +308,12 @@ export async function trackAnalyticsEvent(req, rawPayload = {}) {
 
     cotizacion_id: parsePositiveInt(payload.cotizacion_id),
     cotizacion_folio: cleanString(payload.cotizacion_folio, 120) || null,
+
+    venta_id: parsePositiveInt(payload.venta_id),
+    venta_folio: cleanString(payload.venta_folio, 120) || null,
+
     cantidad: parseDecimal(payload.cantidad),
+    importe: parseDecimal(payload.importe),
 
     oportunidad_tipo: normalizeKey(payload.oportunidad_tipo, 80) || null,
     oportunidad_score: parseScore(payload.oportunidad_score),
@@ -329,7 +346,10 @@ export async function trackAnalyticsEvent(req, rawPayload = {}) {
       motor_vehiculo,
       cotizacion_id,
       cotizacion_folio,
+      venta_id,
+      venta_folio,
       cantidad,
+      importe,
       oportunidad_tipo,
       oportunidad_score,
       metadata_json
@@ -338,6 +358,7 @@ export async function trackAnalyticsEvent(req, rawPayload = {}) {
       ?, ?, ?, ?, ?, ?,
       ?, ?, ?, ?, ?,
       ?, ?, ?, ?, ?, ?,
+      ?, ?, ?, ?,
       ?, ?, ?, ?,
       ?, ?, ?,
       ?, ?, ?
@@ -367,7 +388,10 @@ export async function trackAnalyticsEvent(req, rawPayload = {}) {
       insertPayload.motor_vehiculo,
       insertPayload.cotizacion_id,
       insertPayload.cotizacion_folio,
+      insertPayload.venta_id,
+      insertPayload.venta_folio,
       insertPayload.cantidad,
+      insertPayload.importe,
       insertPayload.oportunidad_tipo,
       insertPayload.oportunidad_score,
       insertPayload.metadata_json,

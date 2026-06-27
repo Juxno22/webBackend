@@ -212,6 +212,159 @@ router.get("/admin/analytics/dashboard", adminOnly, async (req, res, next) => {
       [...range.params, limit]
     );
 
+    const ventaDateSql =
+      "v.created_at >= ? AND v.created_at < DATE_ADD(?, INTERVAL 1 DAY)";
+    const ventaParams = [range.desde, range.hasta];
+
+    const [ventasKpisRows] = await pool.query(
+      `
+  SELECT
+    COUNT(*) AS total_ventas,
+
+    SUM(CASE WHEN v.estado = 'PENDIENTE_PAGO' THEN 1 ELSE 0 END) AS ventas_pendientes_pago,
+    SUM(CASE WHEN v.estado = 'PAGADA' THEN 1 ELSE 0 END) AS ventas_pagadas,
+    SUM(CASE WHEN v.estado = 'EN_PREPARACION' THEN 1 ELSE 0 END) AS ventas_en_preparacion,
+    SUM(CASE WHEN v.estado = 'LISTA_ENTREGA' THEN 1 ELSE 0 END) AS ventas_lista_entrega,
+    SUM(CASE WHEN v.estado = 'ENTREGADA' THEN 1 ELSE 0 END) AS ventas_entregadas,
+    SUM(CASE WHEN v.estado IN ('PAGO_RECHAZADO', 'CANCELADA') THEN 1 ELSE 0 END) AS ventas_perdidas,
+
+    SUM(
+      CASE
+        WHEN v.estado IN ('PAGADA', 'EN_PREPARACION', 'LISTA_ENTREGA', 'ENTREGADA')
+        THEN v.total
+        ELSE 0
+      END
+    ) AS importe_confirmado,
+
+    SUM(
+      CASE
+        WHEN v.estado = 'PENDIENTE_PAGO'
+        THEN v.total
+        ELSE 0
+      END
+    ) AS importe_pendiente,
+
+    AVG(
+      CASE
+        WHEN v.estado IN ('PAGADA', 'EN_PREPARACION', 'LISTA_ENTREGA', 'ENTREGADA')
+        THEN v.total
+        ELSE NULL
+      END
+    ) AS ticket_promedio_confirmado,
+
+    COUNT(DISTINCT CASE
+      WHEN v.estado IN ('PAGADA', 'EN_PREPARACION', 'LISTA_ENTREGA', 'ENTREGADA')
+      THEN v.whatsapp
+      ELSE NULL
+    END) AS clientes_confirmados
+  FROM ventas v
+  WHERE ${ventaDateSql}
+  `,
+      ventaParams
+    );
+
+    const [ventasItemsRows] = await pool.query(
+      `
+  SELECT
+    COALESCE(SUM(vi.cantidad), 0) AS piezas_confirmadas,
+    COUNT(DISTINCT vi.producto_id) AS productos_distintos_vendidos
+  FROM venta_items vi
+  JOIN ventas v ON v.id = vi.venta_id
+  WHERE ${ventaDateSql}
+    AND v.estado IN ('PAGADA', 'EN_PREPARACION', 'LISTA_ENTREGA', 'ENTREGADA')
+  `,
+      ventaParams
+    );
+
+    const [productosVendidosRows] = await pool.query(
+      `
+  SELECT
+    vi.producto_id,
+    vi.codigo_andyfers,
+    vi.codigo_importacion,
+    vi.descripcion_producto,
+    vi.familia,
+    vi.categoria,
+    SUM(vi.cantidad) AS piezas_vendidas,
+    SUM(vi.subtotal) AS importe_vendido,
+    COUNT(DISTINCT vi.venta_id) AS ventas,
+    MAX(v.created_at) AS ultima_venta
+  FROM venta_items vi
+  JOIN ventas v ON v.id = vi.venta_id
+  WHERE ${ventaDateSql}
+    AND v.estado IN ('PAGADA', 'EN_PREPARACION', 'LISTA_ENTREGA', 'ENTREGADA')
+  GROUP BY
+    vi.producto_id,
+    vi.codigo_andyfers,
+    vi.codigo_importacion,
+    vi.descripcion_producto,
+    vi.familia,
+    vi.categoria
+  ORDER BY piezas_vendidas DESC, importe_vendido DESC
+  LIMIT ?
+  `,
+      [...ventaParams, limit]
+    );
+
+    const [embudoVentasRows] = await pool.query(
+      `
+  SELECT
+    'PRODUCTO_AGREGADO_CARRITO_VENTA' AS etapa,
+    COUNT(*) AS total_eventos,
+    COUNT(DISTINCT ae.session_id) AS sesiones,
+    COALESCE(SUM(ae.cantidad), 0) AS piezas,
+    COALESCE(SUM(ae.importe), 0) AS importe
+  FROM analytics_eventos ae
+  WHERE ${range.sql}
+    AND ae.evento = 'PRODUCTO_AGREGADO_CARRITO_VENTA'
+
+  UNION ALL
+
+  SELECT
+    'VENTA_CHECKOUT_CREADO' AS etapa,
+    COUNT(*) AS total_eventos,
+    COUNT(DISTINCT ae.session_id) AS sesiones,
+    COALESCE(SUM(ae.cantidad), 0) AS piezas,
+    COALESCE(SUM(ae.importe), 0) AS importe
+  FROM analytics_eventos ae
+  WHERE ${range.sql}
+    AND ae.evento = 'VENTA_CHECKOUT_CREADO'
+
+  UNION ALL
+
+  SELECT
+    'VENTA_PAGO_APROBADO' AS etapa,
+    COUNT(*) AS total_eventos,
+    COUNT(DISTINCT ae.session_id) AS sesiones,
+    COALESCE(SUM(ae.cantidad), 0) AS piezas,
+    COALESCE(SUM(ae.importe), 0) AS importe
+  FROM analytics_eventos ae
+  WHERE ${range.sql}
+    AND ae.evento = 'VENTA_PAGO_APROBADO'
+
+  UNION ALL
+
+  SELECT
+    'VENTA_ENTREGADA' AS etapa,
+    COUNT(*) AS total_eventos,
+    COUNT(DISTINCT ae.session_id) AS sesiones,
+    COALESCE(SUM(ae.cantidad), 0) AS piezas,
+    COALESCE(SUM(ae.importe), 0) AS importe
+  FROM analytics_eventos ae
+  WHERE ${range.sql}
+    AND ae.evento = 'VENTA_ENTREGADA'
+  `,
+      [
+        ...range.params,
+        ...range.params,
+        ...range.params,
+        ...range.params,
+      ]
+    );
+
+    const ventasKpis = ventasKpisRows?.[0] || {};
+    const ventasItems = ventasItemsRows?.[0] || {};
+
     res.json({
       ok: true,
       data: {
@@ -224,6 +377,15 @@ router.get("/admin/analytics/dashboard", adminOnly, async (req, res, next) => {
         productos_mas_consultados: productosConsultadosRows,
         productos_mas_cotizados: productosCotizadosRows,
         consultas_vehiculo: vehiculosRows,
+        ventas_kpis: {
+          ...ventasKpis,
+          piezas_confirmadas: Number(ventasItems.piezas_confirmadas || 0),
+          productos_distintos_vendidos: Number(
+            ventasItems.productos_distintos_vendidos || 0
+          ),
+        },
+        productos_mas_vendidos: productosVendidosRows,
+        embudo_ventas: embudoVentasRows,
       },
     });
   } catch (error) {

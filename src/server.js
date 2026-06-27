@@ -17,6 +17,7 @@ import healthRoutes from "./routes/health.routes.js";
 import catalogoRoutes from "./routes/catalog.routes.js";
 import quoteRoutes from "./routes/quotes.routes.js";
 import homeRoutes from "./routes/home.routes.js";
+import salesRoutes from "./routes/sales.routes.js";
 import siteRoutes from "./routes/site.routes.js";
 import adminRoutes from "./routes/admin.routes.js";
 import analyticsRoutes from "./routes/analytics.routes.js";
@@ -31,6 +32,8 @@ import performanceRoutes from "./routes/performance.routes.js";
 import productionRoutes from "./routes/production.routes.js";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler.js";
 import { buildCorsOptions, getProductionHelmetOptions } from "./config/productionConfig.js";
+import adminEcommerceRoutes from "./routes/adminEcommerce.routes.js";
+import adminSalesRoutes from "./routes/adminSales.routes.js";
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -65,11 +68,14 @@ app.use("/api/admin", adminApiRateLimit);
 app.use("/api/admin", adminMutatingRateLimit);
 app.use("/api/admin", auditAdminMutations);
 app.use("/api", adminSecurityRoutes);
+app.use("/api", adminEcommerceRoutes)
+app.use("/api", adminSalesRoutes);
 
 app.use("/api", healthRoutes);
 app.use("/api", catalogoRoutes);
 app.use("/api", quoteRoutes);
 app.use("/api", homeRoutes);
+app.use("/api", salesRoutes);
 app.use("/api", siteRoutes);
 app.use("/api", adminRoutes);
 app.use("/api", analyticsRoutes);

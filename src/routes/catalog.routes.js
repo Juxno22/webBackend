@@ -131,6 +131,34 @@ function cleanQueryValue(value) {
   return String(value).trim();
 };
 
+function getCatalogEcommerceSucursalClave() {
+  return String(process.env.ECOMMERCE_SUCURSAL_CLAVE || "ECOMMERCE").trim();
+}
+
+function buildEcommerceInventorySelectSql() {
+  return `
+    COALESCE(
+      MAX(CASE WHEN i.disponible_web = 1 THEN i.stock ELSE 0 END),
+      0
+    ) AS stock_total_web,
+
+    MAX(CASE WHEN i.disponible_web = 1 THEN i.precio ELSE NULL END) AS precio_minimo,
+    MAX(CASE WHEN i.disponible_web = 1 THEN i.precio ELSE NULL END) AS precio_venta_web,
+
+    MAX(CASE WHEN i.disponible_web = 1 THEN i.mostrar_precio ELSE 0 END) AS mostrar_precio_web,
+
+    MAX(
+      CASE
+        WHEN i.disponible_web = 1
+          AND COALESCE(i.stock, 0) > 0
+          AND COALESCE(i.precio, 0) > 0
+        THEN 1
+        ELSE 0
+      END
+    ) AS venta_web_habilitada
+  `;
+}
+
 function buildProductWhere(query) {
   const conditions = ["p.activo = 1", "p.activo_web = 1"];
   conditions.push(buildValidPublicCodeCondition("p"));
@@ -441,6 +469,8 @@ router.get("/productos/destacados", async (req, res, next) => {
   try {
     const limit = clampNumber(parsePositiveInt(req.query.limit, 8), 1, 24);
 
+    const ecommerceClave = getCatalogEcommerceSucursalClave();
+
     const [rows] = await pool.query(
       `
       SELECT
@@ -457,13 +487,15 @@ router.get("/productos/destacados", async (req, res, next) => {
         p.prioridad_ia,
         p.nuevo_web,
         p.destacado,
-        COALESCE(SUM(CASE WHEN i.disponible_web = 1 THEN i.stock ELSE 0 END), 0) AS stock_total_web,
-        MIN(i.precio) AS precio_minimo,
+        ${buildEcommerceInventorySelectSql()},
         COUNT(DISTINCT pc.id) AS total_cruces,
         ${buildProductoMultimediaSelectSql("p")}
       FROM productos p
       JOIN categorias c ON c.id = p.categoria_id
-      LEFT JOIN inventario i ON i.producto_id = p.id
+      LEFT JOIN sucursales se ON se.clave = ?
+      LEFT JOIN inventario i
+        ON i.producto_id = p.id
+        AND i.sucursal_id = se.id
       LEFT JOIN producto_cruces pc ON pc.producto_id = p.id
       WHERE p.activo = 1
         AND p.activo_web = 1
@@ -490,7 +522,7 @@ router.get("/productos/destacados", async (req, res, next) => {
         p.id DESC
       LIMIT ?
       `,
-      [limit]
+      [ecommerceClave, limit]
     );
 
     res.json({
@@ -736,6 +768,7 @@ router.get("/productos", async (req, res, next) => {
     const offset = (page - 1) * limit;
 
     const { whereSql, params } = buildProductWhere(req.query);
+    const ecommerceClave = getCatalogEcommerceSucursalClave();
 
     const [countRows] = await pool.query(
       `
@@ -764,13 +797,15 @@ router.get("/productos", async (req, res, next) => {
         p.unidad_medida,
         p.prioridad_ia,
         p.nuevo_web,
-        COALESCE(SUM(CASE WHEN i.disponible_web = 1 THEN i.stock ELSE 0 END), 0) AS stock_total_web,
-        MIN(i.precio) AS precio_minimo,
+        ${buildEcommerceInventorySelectSql()},
         COUNT(DISTINCT pc.id) AS total_cruces,
         ${buildProductoMultimediaSelectSql("p")}
       FROM productos p
       JOIN categorias c ON c.id = p.categoria_id
-      LEFT JOIN inventario i ON i.producto_id = p.id
+      LEFT JOIN sucursales se ON se.clave = ?
+      LEFT JOIN inventario i
+        ON i.producto_id = p.id
+        AND i.sucursal_id = se.id
       LEFT JOIN producto_cruces pc ON pc.producto_id = p.id
       ${whereSql}
       GROUP BY
@@ -800,7 +835,7 @@ router.get("/productos", async (req, res, next) => {
         p.id ASC
       LIMIT ? OFFSET ?
       `,
-      [...params, limit, offset],
+      [ecommerceClave, ...params, limit, offset],
     );
 
     res.json({
@@ -922,6 +957,7 @@ router.get("/productos/:codigo", async (req, res, next) => {
   try {
     const codigo = String(req.params.codigo || "").trim();
     const codigoNormalizado = normalizePartNumber(codigo);
+    const ecommerceClave = getCatalogEcommerceSucursalClave();
 
     const [productos] = await pool.query(
       `
@@ -941,12 +977,14 @@ router.get("/productos/:codigo", async (req, res, next) => {
         p.nuevo_web,
         p.activo_web,
         p.activo,
-        COALESCE(SUM(CASE WHEN i.disponible_web = 1 THEN i.stock ELSE 0 END), 0) AS stock_total_web,
-        MIN(i.precio) AS precio_minimo,
+        ${buildEcommerceInventorySelectSql()},
         ${buildProductoMultimediaSelectSql("p")}
       FROM productos p
       JOIN categorias c ON c.id = p.categoria_id
-      LEFT JOIN inventario i ON i.producto_id = p.id
+      LEFT JOIN sucursales se ON se.clave = ?
+      LEFT JOIN inventario i
+        ON i.producto_id = p.id
+        AND i.sucursal_id = se.id
       WHERE p.activo = 1
         AND p.activo_web = 1
         AND (
@@ -972,7 +1010,7 @@ router.get("/productos/:codigo", async (req, res, next) => {
         p.activo
       LIMIT 1
       `,
-      [codigo, codigoNormalizado, codigo]
+      [ecommerceClave, codigo, codigoNormalizado, codigo]
     );
 
     const producto = productos?.[0];
@@ -1042,17 +1080,22 @@ router.get("/productos/:codigo", async (req, res, next) => {
       SELECT
         i.id,
         s.nombre AS sucursal,
+        s.clave AS sucursal_clave,
         i.stock,
         i.precio,
+        i.precio_publico,
+        i.mostrar_precio,
         i.disponible_web,
         i.updated_at
       FROM inventario i
       JOIN sucursales s ON s.id = i.sucursal_id
       WHERE i.producto_id = ?
+        AND s.clave = ?
       ORDER BY s.nombre ASC
       `,
-      [producto.id]
+      [producto.id, ecommerceClave]
     );
+
     const [atributos] = await pool.query(
       `
             SELECT
