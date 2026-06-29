@@ -34,6 +34,7 @@ import { errorHandler, notFoundHandler } from "./middleware/errorHandler.js";
 import { buildCorsOptions, getProductionHelmetOptions } from "./config/productionConfig.js";
 import adminEcommerceRoutes from "./routes/adminEcommerce.routes.js";
 import adminSalesRoutes from "./routes/adminSales.routes.js";
+import adminOperationsRoutes from "./routes/adminOperations.routes.js";
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -67,6 +68,7 @@ app.use("/api/admin", auditAdminMutations);
 app.use("/api", adminSecurityRoutes);
 app.use("/api", adminEcommerceRoutes);
 app.use("/api", adminSalesRoutes);
+app.use("/api", adminOperationsRoutes);
 
 app.use("/api", healthRoutes);
 app.use("/api", catalogoRoutes);
