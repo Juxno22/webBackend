@@ -144,7 +144,9 @@ async function getSaleProductSnapshot(connection, item, sucursalId) {
       i.id AS inventario_id,
       i.sucursal_id,
       COALESCE(i.stock, 0) AS stock,
-      i.precio AS precio,
+      i.precio AS precio_interno,
+      i.precio_publico AS precio,
+      i.precio_publico AS precio_web,
       i.disponible_web,
       ${buildSaleProductMultimediaSelectSql("p")}
     FROM productos p

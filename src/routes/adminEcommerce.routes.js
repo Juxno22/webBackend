@@ -163,11 +163,22 @@ function buildImportRow(row, index) {
     "inventario",
   ]);
 
-  const precioRaw = getCell(row, [
+  const precioInternoRaw = getCell(row, [
+    "precio_interno",
+    "precio_mostrador",
+    "precio_base",
+    "precio_local",
     "precio",
-    "precio_venta",
+  ]);
+
+  const precioWebRaw = getCell(row, [
     "precio_web",
     "precio_publico",
+    "precio_público",
+    "precio_ecommerce",
+    "precio_venta_web",
+    "precio_venta",
+    "precio",
   ]);
 
   const multiploRaw = getCell(row, [
@@ -178,7 +189,8 @@ function buildImportRow(row, index) {
   ]);
 
   const existencia = parseStock(existenciaRaw);
-  const precio = parsePrice(precioRaw);
+  const precioInterno = parsePrice(precioInternoRaw);
+  const precioWeb = parsePrice(precioWebRaw);
   const multiploVenta = parseMultiplo(multiploRaw);
 
   return {
@@ -186,7 +198,8 @@ function buildImportRow(row, index) {
     codigo_andyfers: codigoAndyfers,
     codigo_importacion: codigoImportacion,
     existencia,
-    precio,
+    precio_interno: precioInterno,
+    precio_web: precioWeb,
     multiplo_venta: multiploVenta,
   };
 }
@@ -272,9 +285,8 @@ async function findProductByCodes(connection, item) {
   }
 
   return {
-    error: `Producto no encontrado: ${
-      item.codigo_andyfers || item.codigo_importacion || "sin código"
-    }.`,
+    error: `Producto no encontrado: ${item.codigo_andyfers || item.codigo_importacion || "sin código"
+      }.`,
   };
 }
 
@@ -289,8 +301,12 @@ function validateImportItem(item) {
     errors.push("Existencia inválida.");
   }
 
-  if (item.precio === null || item.precio <= 0) {
-    errors.push("Precio inválido o menor/igual a cero.");
+  if (item.precio_interno === null || item.precio_interno <= 0) {
+    errors.push("Precio interno inválido o menor/igual a cero.");
+  }
+
+  if (item.precio_web === null || item.precio_web <= 0) {
+    errors.push("Precio web inválido o menor/igual a cero.");
   }
 
   if (!item.multiplo_venta || item.multiplo_venta < 1) {
@@ -362,13 +378,13 @@ async function processImportRows({ connection, rows, sucursal, dryRun }) {
 
     const current = inventarioRows?.[0] || null;
 
-    const nextDisponibleWeb = item.existencia > 0 && item.precio > 0 ? 1 : 0;
+    const nextDisponibleWeb = item.existencia > 0 && item.precio_web > 0 ? 1 : 0;
 
     const hasChanges =
       !current ||
       Number(current.stock || 0) !== Number(item.existencia) ||
-      Number(current.precio || 0) !== Number(item.precio) ||
-      Number(current.precio_publico || 0) !== Number(item.precio) ||
+      Number(current.precio || 0) !== Number(item.precio_interno) ||
+      Number(current.precio_publico || 0) !== Number(item.precio_web) ||
       Number(current.multiplo_venta || 1) !== Number(item.multiplo_venta) ||
       Number(current.disponible_web || 0) !== nextDisponibleWeb;
 
@@ -416,8 +432,8 @@ async function processImportRows({ connection, rows, sucursal, dryRun }) {
           producto.id,
           sucursal.id,
           item.existencia,
-          item.precio,
-          item.precio,
+          item.precio_interno,
+          item.precio_web,
           item.multiplo_venta,
           nextDisponibleWeb,
         ]
@@ -438,7 +454,8 @@ async function processImportRows({ connection, rows, sucursal, dryRun }) {
       estado: dryRun ? "VALIDADO" : current ? "ACTUALIZADO" : "CREADO",
       matched_by: lookup.matched_by,
       existencia: item.existencia,
-      precio: item.precio,
+      precio_interno: item.precio_interno,
+      precio_web: item.precio_web,
       multiplo_venta: item.multiplo_venta,
       disponible_web: nextDisponibleWeb,
     });
@@ -460,12 +477,22 @@ router.get(
       const [summaryRows] = await pool.query(
         `
         SELECT
-          COUNT(i.id) AS productos_con_inventario,
-          SUM(CASE WHEN i.disponible_web = 1 AND i.stock > 0 AND i.precio > 0 THEN 1 ELSE 0 END) AS vendibles,
-          SUM(CASE WHEN COALESCE(i.stock, 0) <= 0 THEN 1 ELSE 0 END) AS sin_existencia,
-          SUM(CASE WHEN COALESCE(i.precio, 0) <= 0 THEN 1 ELSE 0 END) AS sin_precio,
-          SUM(COALESCE(i.stock, 0)) AS piezas_totales,
-          MAX(i.updated_at) AS ultima_actualizacion
+        COUNT(i.id) AS productos_con_inventario,
+        SUM(
+          CASE
+            WHEN i.disponible_web = 1
+              AND COALESCE(i.stock, 0) > 0
+              AND COALESCE(i.precio_publico, 0) > 0
+            THEN 1
+            ELSE 0
+          END
+        ) AS vendibles,
+        SUM(CASE WHEN COALESCE(i.stock, 0) <= 0 THEN 1 ELSE 0 END) AS sin_existencia,
+        SUM(CASE WHEN COALESCE(i.precio, 0) <= 0 THEN 1 ELSE 0 END) AS sin_precio_interno,
+        SUM(CASE WHEN COALESCE(i.precio_publico, 0) <= 0 THEN 1 ELSE 0 END) AS sin_precio_web,
+        SUM(CASE WHEN COALESCE(i.precio_publico, 0) <= 0 THEN 1 ELSE 0 END) AS sin_precio,
+        SUM(COALESCE(i.stock, 0)) AS piezas_totales,
+        MAX(i.updated_at) AS ultima_actualizacion
         FROM sucursales s
         LEFT JOIN inventario i ON i.sucursal_id = s.id
         WHERE s.clave = ?
@@ -563,7 +590,8 @@ router.post(
             item.codigo_andyfers ||
             item.codigo_importacion ||
             item.existencia !== null ||
-            item.precio !== null
+            item.precio_interno !== null ||
+            item.precio_web !== null
           );
         });
 

@@ -142,8 +142,9 @@ function buildEcommerceInventorySelectSql() {
       0
     ) AS stock_total_web,
 
-    MAX(CASE WHEN i.disponible_web = 1 THEN i.precio ELSE NULL END) AS precio_minimo,
-    MAX(CASE WHEN i.disponible_web = 1 THEN i.precio ELSE NULL END) AS precio_venta_web,
+    MAX(CASE WHEN i.disponible_web = 1 THEN i.precio ELSE NULL END) AS precio_interno_web,
+    MAX(CASE WHEN i.disponible_web = 1 THEN i.precio_publico ELSE NULL END) AS precio_minimo,
+    MAX(CASE WHEN i.disponible_web = 1 THEN i.precio_publico ELSE NULL END) AS precio_venta_web,
 
     MAX(CASE WHEN i.disponible_web = 1 THEN i.mostrar_precio ELSE 0 END) AS mostrar_precio_web,
 
@@ -151,7 +152,7 @@ function buildEcommerceInventorySelectSql() {
       CASE
         WHEN i.disponible_web = 1
           AND COALESCE(i.stock, 0) > 0
-          AND COALESCE(i.precio, 0) > 0
+          AND COALESCE(i.precio_publico, 0) > 0
         THEN 1
         ELSE 0
       END

@@ -49,16 +49,13 @@ app.use(express.urlencoded({ extended: true }));
 app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev"));
 
 app.get("/", (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
   res.json({
     ok: true,
-    message: "Andyfers Backend API funcionando",
-    environment: process.env.NODE_ENV || "development",
-    endpoints: {
-      health: "/api/health",
-      dbHealth: "/api/db-health",
-      dbInfo: "/api/db-info",
-      seoLandings: "/api/seo/landings",
-    },
+    service: 'Andyfers API',
+    status: 'runnig',
+    health: '/api/health',
+    timestamp: new Date().toISOString(),
   });
 });
 
@@ -68,7 +65,7 @@ app.use("/api/admin", adminApiRateLimit);
 app.use("/api/admin", adminMutatingRateLimit);
 app.use("/api/admin", auditAdminMutations);
 app.use("/api", adminSecurityRoutes);
-app.use("/api", adminEcommerceRoutes)
+app.use("/api", adminEcommerceRoutes);
 app.use("/api", adminSalesRoutes);
 
 app.use("/api", healthRoutes);
