@@ -879,6 +879,7 @@ router.post("/ventas/mercadopago/webhook", async (req, res, next) => {
 router.get("/ventas/:folio/publica", async (req, res, next) => {
     try {
         const folio = cleanSaleText(req.params.folio);
+        const whatsapp = cleanPhone(req.query.whatsapp);
 
         const [ventas] = await pool.query(
             `
@@ -887,6 +888,7 @@ router.get("/ventas/:folio/publica", async (req, res, next) => {
         folio,
         estado,
         nombre_cliente,
+        whatsapp,
         subtotal,
         costo_envio,
         descuento,
@@ -909,6 +911,15 @@ router.get("/ventas/:folio/publica", async (req, res, next) => {
             return res.status(404).json({
                 ok: false,
                 error: "Venta no encontrada.",
+            });
+        }
+
+        const verified = whatsapp && cleanPhone(venta.whatsapp) === whatsapp;
+
+        if (whatsapp && !verified) {
+            return res.status(404).json({
+                ok: false,
+                error: 'No encontramos un pedido con esos datos',
             });
         }
 
@@ -936,8 +947,21 @@ router.get("/ventas/:folio/publica", async (req, res, next) => {
         res.json({
             ok: true,
             data: {
-                ...venta,
-                items,
+                id: venta.id,
+                folio: venta.folio,
+                estado: venta.estado,
+                nombre_cliente: venta.nombre_cliente,
+                subtotal: venta.subtotal,
+                costo_envio: venta.costo_envio,
+                descuento: venta.descuento,
+                total: venta.total,
+                moneda: venta.moneda,
+                mp_payment_status: venta.mp_payment_status,
+                mp_payment_status_detail: venta.mp_payment_status_detail,
+                pagado_at: venta.pagado_at,
+                created_at: venta.created_at,
+                verified,
+                items: verified ? items : [],
             },
         });
     } catch (error) {
