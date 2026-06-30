@@ -960,6 +960,9 @@ function m62BuildProductPayload(body = {}) {
     visible_catalogo: m62ParseTiny(body.visible_catalogo, 1),
     activo_web: m62ParseTiny(body.activo_web, 1),
     activo: m62ParseTiny(body.activo, 1),
+    stock: m62ParseInt(body.stock, null),
+    precio: m62ParseDecimal(body.precio, null),
+    precio_publico: m62ParseDecimal(body.precio_publico, null),
   };
 }
 
@@ -979,6 +982,87 @@ function m62ValidateProductPayload(payload, { creating = false } = {}) {
   }
 
   return errors;
+}
+
+function m62HasInventoryPayload(payload = {}) {
+  return (
+    payload.stock !== null ||
+    payload.precio !== null ||
+    payload.precio_publico !== null
+  );
+}
+
+async function m62GetEcommerceSucursal(connection) {
+  const clave = cleanString(process.env.ECOMMERCE_SUCURSAL_CLAVE || "ECOMMERCE");
+
+  const [rows] = await connection.query(
+    `
+    SELECT id, nombre, clave
+    FROM sucursales
+    WHERE clave = ?
+      AND activo = 1
+    LIMIT 1
+    `,
+    [clave]
+  );
+
+  const sucursal = rows?.[0];
+
+  if (!sucursal) {
+    const error = new Error(`No existe almacén ecommerce con clave ${clave}.`);
+    error.status = 500;
+    throw error;
+  }
+
+  return sucursal;
+}
+
+async function m62UpsertEcommerceInventario(connection, productoId, payload = {}) {
+  if (!m62HasInventoryPayload(payload)) return;
+
+  const sucursal = await m62GetEcommerceSucursal(connection);
+
+  const stock = Math.max(Number(payload.stock || 0), 0);
+  const precio = payload.precio === null ? null : Number(payload.precio);
+  const precioPublico =
+    payload.precio_publico === null ? null : Number(payload.precio_publico);
+
+  const disponibleWeb = stock > 0 && Number(precioPublico || 0) > 0 ? 1 : 0;
+  const mostrarPrecio = Number(precioPublico || 0) > 0 ? 1 : 0;
+
+  await connection.query(
+    `
+    INSERT INTO inventario (
+      producto_id,
+      sucursal_id,
+      stock,
+      precio,
+      precio_publico,
+      multiplo_venta,
+      mostrar_precio,
+      disponible_cotizacion,
+      disponible_web
+    )
+    VALUES (?, ?, ?, ?, ?, 1, ?, 1, ?)
+    ON DUPLICATE KEY UPDATE
+      stock = VALUES(stock),
+      precio = VALUES(precio),
+      precio_publico = VALUES(precio_publico),
+      mostrar_precio = VALUES(mostrar_precio),
+      disponible_cotizacion = 1,
+      disponible_web = VALUES(disponible_web),
+      updated_at = NOW()
+    `,
+    [
+      productoId,
+      sucursal.id,
+      stock,
+      precio,
+      precioPublico,
+      mostrarPrecio,
+      disponibleWeb,
+    ]
+  );
 }
 
 //VISIBILIDAD Y ESTADO
@@ -1382,6 +1466,12 @@ router.get("/admin/productos/:id",
           p.activo_web,
           p.activo,
 
+          COALESCE(i.stock, 0) AS stock,
+          i.precio,
+          i.precio_publico,
+          COALESCE(i.mostrar_precio, 0) AS mostrar_precio,
+          COALESCE(i.disponible_web, 0) AS disponible_web,
+
           p.created_at,
           p.updated_at,
 
@@ -1420,10 +1510,12 @@ router.get("/admin/productos/:id",
           END AS motivo_visibilidad
         FROM productos p
         JOIN categorias c ON c.id = p.categoria_id
+        LEFT JOIN sucursales se ON se.clave = ? AND se.activo = 1
+        LEFT JOIN inventario i ON i.producto_id = p.id AND i.sucursal_id = se.id
         WHERE p.id = ?
         LIMIT 1
         `,
-        [productoId]
+        [cleanString(process.env.ECOMMERCE_SUCURSAL_CLAVE || "ECOMMERCE"), productoId]
       );
 
       const producto = productos?.[0];
@@ -1541,10 +1633,10 @@ router.get("/admin/productos/:id",
   }
 );
 
-router.post("/admin/productos",
-  requireAdminAuth,
-  requireRole(["ADMIN"]),
+router.post("/admin/productos", requireAdminAuth, requireRole(["ADMIN"]),
   async (req, res, next) => {
+    let connection;
+
     try {
       const payload = m62BuildProductPayload(req.body);
       const errors = m62ValidateProductPayload(payload, { creating: true });
@@ -1574,7 +1666,10 @@ router.post("/admin/productos",
         });
       }
 
-      const [result] = await pool.query(
+      connection = await pool.getConnection();
+      await connection.beginTransaction();
+
+      const [result] = await connection.query(
         `
         INSERT INTO productos (
           codigo_andyfers,
@@ -1628,7 +1723,11 @@ router.post("/admin/productos",
         ]
       );
 
-      res.status(201).json({
+      await m62UpsertEcommerceInventario(connection, result.insertId, payload);
+
+      await connection.commit();
+
+      return res.status(201).json({
         ok: true,
         message: "Producto creado correctamente.",
         data: {
@@ -1636,6 +1735,10 @@ router.post("/admin/productos",
         },
       });
     } catch (error) {
+      if (connection) {
+        await connection.rollback().catch(() => { });
+      }
+
       if (error?.code === "ER_DUP_ENTRY") {
         return res.status(409).json({
           ok: false,
@@ -1643,15 +1746,19 @@ router.post("/admin/productos",
         });
       }
 
-      next(error);
+      return next(error);
+    } finally {
+      if (connection) {
+        connection.release();
+      }
     }
   }
 );
 
-router.patch("/admin/productos/:id",
-  requireAdminAuth,
-  requireRole(["ADMIN", "VENTAS"]),
+router.patch("/admin/productos/:id", requireAdminAuth, requireRole(["ADMIN", "VENTAS"]),
   async (req, res, next) => {
+    let connection;
+
     try {
       const productoId = Number.parseInt(req.params.id, 10);
 
@@ -1692,7 +1799,10 @@ router.patch("/admin/productos/:id",
         }
       }
 
-      const [result] = await pool.query(
+      connection = await pool.getConnection();
+      await connection.beginTransaction();
+
+      const [result] = await connection.query(
         `
         UPDATE productos
         SET
@@ -1749,17 +1859,27 @@ router.patch("/admin/productos/:id",
       );
 
       if (result.affectedRows === 0) {
+        await connection.rollback();
+
         return res.status(404).json({
           ok: false,
           error: "Producto no encontrado.",
         });
       }
 
-      res.json({
+      await m62UpsertEcommerceInventario(connection, productoId, payload);
+
+      await connection.commit();
+
+      return res.json({
         ok: true,
         message: "Producto actualizado correctamente.",
       });
     } catch (error) {
+      if (connection) {
+        await connection.rollback().catch(() => { });
+      }
+
       if (error?.code === "ER_DUP_ENTRY") {
         return res.status(409).json({
           ok: false,
@@ -1767,7 +1887,11 @@ router.patch("/admin/productos/:id",
         });
       }
 
-      next(error);
+      return next(error);
+    } finally {
+      if (connection) {
+        connection.release();
+      }
     }
   }
 );
