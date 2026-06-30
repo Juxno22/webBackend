@@ -20,6 +20,29 @@ const INTENCIONES = [
   "OTRO",
 ];
 
+const PRIORIDADES = ["BAJA", "MEDIA", "ALTA", "URGENTE"];
+
+const CIERRE_MOTIVOS = [
+  "COTIZACION_ENVIADA",
+  "CLIENTE_NO_RESPONDIO",
+  "PRODUCTO_NO_DISPONIBLE",
+  "DUDA_RESUELTA",
+  "VENTA_CANALIZADA",
+  "OTRO",
+];
+
+function normalizePriority(value) {
+  const clean = cleanString(value, 20).toUpperCase();
+
+  return PRIORIDADES.includes(clean) ? clean : "MEDIA";
+}
+
+function normalizeCloseReason(value) {
+  const clean = cleanString(value, 80).toUpperCase();
+
+  return CIERRE_MOTIVOS.includes(clean) ? clean : "";
+}
+
 function cleanString(value, maxLength = 500) {
   return String(value || "").trim().slice(0, maxLength);
 }
@@ -160,6 +183,10 @@ function mapConversation(row) {
     total_mensajes: Number(row.total_mensajes || 0),
     last_message_id: Number(row.last_message_id || 0),
     cerrado_at: row.cerrado_at,
+    cierre_motivo: row.cierre_motivo,
+    cierre_nota: row.cierre_nota,
+    nota_interna: row.nota_interna,
+    reabierto_motivo: row.reabierto_motivo,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -596,9 +623,7 @@ router.get("/admin/chat/conversaciones/:id", adminChatAccess, async (req, res, n
   }
 });
 
-router.post(
-  "/admin/chat/conversaciones/:id/mensajes",
-  adminChatAccess,
+router.post("/admin/chat/conversaciones/:id/mensajes", adminChatAccess,
   async (req, res, next) => {
     const connection = await pool.getConnection();
 
@@ -668,22 +693,64 @@ router.post(
   }
 );
 
-router.patch(
-  "/admin/chat/conversaciones/:id/estado",
+router.patch("/admin/chat/conversaciones/:id/estado",
   adminChatAccess,
   async (req, res, next) => {
     try {
       const id = Number(req.params.id || 0);
-      const estado = normalizeEstado(req.body?.estado);
+      const estado = cleanString(req.body?.estado, 40).toUpperCase();
+      const allowed = ["ABIERTO", "ATENDIENDO", "CERRADO"];
 
-      if (!estado) {
+      if (!allowed.includes(estado)) {
         return res.status(400).json({
           ok: false,
           message: "Estado de chat inválido.",
         });
       }
 
+      const [[current]] = await pool.query(
+        `
+          SELECT *
+          FROM chat_conversaciones
+          WHERE id = ?
+          LIMIT 1
+        `,
+        [id]
+      );
+
+      if (!current) {
+        return res.status(404).json({
+          ok: false,
+          message: "Conversación no encontrada.",
+        });
+      }
+
       const admin = getAdminIdentity(req);
+
+      const cierreMotivo =
+        estado === "CERRADO"
+          ? normalizeCloseReason(req.body?.cierre_motivo)
+          : current.cierre_motivo;
+
+      const cierreNota =
+        estado === "CERRADO"
+          ? cleanString(req.body?.cierre_nota || req.body?.nota, 1200)
+          : current.cierre_nota;
+
+      if (estado === "CERRADO" && !cierreMotivo) {
+        return res.status(400).json({
+          ok: false,
+          message: "Selecciona un motivo de cierre.",
+        });
+      }
+
+      const reabiertoMotivo =
+        current.estado === "CERRADO" && estado !== "CERRADO"
+          ? cleanString(
+            req.body?.reabierto_motivo || "Reapertura manual",
+            180
+          )
+          : current.reabierto_motivo;
 
       const [result] = await pool.query(
         `
@@ -691,12 +758,24 @@ router.patch(
           SET
             estado = ?,
             cerrado_at = CASE WHEN ? = 'CERRADO' THEN NOW() ELSE NULL END,
+            cierre_motivo = ?,
+            cierre_nota = ?,
+            reabierto_motivo = ?,
             admin_asignado_correo = COALESCE(admin_asignado_correo, ?),
             admin_asignado_nombre = COALESCE(admin_asignado_nombre, ?),
             updated_at = NOW()
           WHERE id = ?
         `,
-        [estado, estado, admin.correo, admin.nombre, id]
+        [
+          estado,
+          estado,
+          cierreMotivo || null,
+          cierreNota || null,
+          reabiertoMotivo || null,
+          admin.correo,
+          admin.nombre,
+          id,
+        ]
       );
 
       if (!result.affectedRows) {
@@ -710,16 +789,104 @@ router.patch(
         query: (...args) => pool.query(...args),
       };
 
-      await logChatEvent(
-        connectionLike,
-        id,
-        "CAMBIO_ESTADO",
-        `Estado actualizado a ${estado}.`,
-        {
-          estado,
-          admin_correo: admin.correo,
-        }
+      if (typeof logChatEvent === "function") {
+        await logChatEvent(
+          connectionLike,
+          id,
+          estado === "CERRADO" ? "CIERRE" : "CAMBIO_ESTADO",
+          estado === "CERRADO"
+            ? `Conversación cerrada: ${cierreMotivo}.`
+            : `Estado actualizado a ${estado}.`,
+          {
+            estado,
+            cierre_motivo: cierreMotivo || null,
+            reabierto_motivo: reabiertoMotivo || null,
+            admin_correo: admin.correo,
+          }
+        );
+      }
+
+      const updated = await getConversationById(id);
+
+      res.json({
+        ok: true,
+        data: mapConversation(updated),
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.patch(
+  "/admin/chat/conversaciones/:id/prioridad",
+  adminChatAccess,
+  async (req, res, next) => {
+    try {
+      const id = Number(req.params.id || 0);
+      const prioridad = normalizePriority(req.body?.prioridad);
+      const admin = getAdminIdentity(req);
+
+      const [result] = await pool.query(
+        `
+          UPDATE chat_conversaciones
+          SET
+            prioridad = ?,
+            admin_asignado_correo = COALESCE(admin_asignado_correo, ?),
+            admin_asignado_nombre = COALESCE(admin_asignado_nombre, ?),
+            updated_at = NOW()
+          WHERE id = ?
+        `,
+        [prioridad, admin.correo, admin.nombre, id]
       );
+
+      if (!result.affectedRows) {
+        return res.status(404).json({
+          ok: false,
+          message: "Conversación no encontrada.",
+        });
+      }
+
+      const updated = await getConversationById(id);
+
+      res.json({
+        ok: true,
+        data: mapConversation(updated),
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.patch(
+  "/admin/chat/conversaciones/:id/nota-interna",
+  adminChatAccess,
+  async (req, res, next) => {
+    try {
+      const id = Number(req.params.id || 0);
+      const notaInterna = cleanString(req.body?.nota_interna, 3000);
+      const admin = getAdminIdentity(req);
+
+      const [result] = await pool.query(
+        `
+          UPDATE chat_conversaciones
+          SET
+            nota_interna = ?,
+            admin_asignado_correo = COALESCE(admin_asignado_correo, ?),
+            admin_asignado_nombre = COALESCE(admin_asignado_nombre, ?),
+            updated_at = NOW()
+          WHERE id = ?
+        `,
+        [notaInterna || null, admin.correo, admin.nombre, id]
+      );
+
+      if (!result.affectedRows) {
+        return res.status(404).json({
+          ok: false,
+          message: "Conversación no encontrada.",
+        });
+      }
 
       const updated = await getConversationById(id);
 
