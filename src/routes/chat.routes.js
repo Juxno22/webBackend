@@ -5,7 +5,20 @@ import { requireAdminAuth, requireRole } from "../middleware/authAdmin.js";
 
 const router = Router();
 
-const adminChatAccess = [requireAdminAuth, requireRole(["ADMIN", "VENTAS", "SOPORTE"])];
+const adminChatAccess = [
+  requireAdminAuth,
+  requireRole(["ADMIN", "VENTAS", "SOPORTE"]),
+];
+
+const INTENCIONES = [
+  "COTIZACION",
+  "DUDA_PRODUCTO",
+  "COMPATIBILIDAD",
+  "EXISTENCIA_PRECIO",
+  "ENVIO",
+  "SEGUIMIENTO_PEDIDO",
+  "OTRO",
+];
 
 function cleanString(value, maxLength = 500) {
   return String(value || "").trim().slice(0, maxLength);
@@ -33,6 +46,12 @@ function getAdminIdentity(req) {
   };
 }
 
+function normalizeIntention(value) {
+  const clean = cleanString(value, 40);
+
+  return INTENCIONES.includes(clean) ? clean : "COTIZACION";
+}
+
 function mapConversation(row) {
   if (!row) return null;
 
@@ -41,6 +60,9 @@ function mapConversation(row) {
     public_token: row.public_token,
     cotizacion_id: row.cotizacion_id,
     cotizacion_folio: row.cotizacion_folio,
+    pedido_folio: row.pedido_folio,
+    producto_codigo: row.producto_codigo,
+    tipo_intencion: row.tipo_intencion,
     cliente_nombre: row.cliente_nombre,
     cliente_whatsapp: row.cliente_whatsapp,
     cliente_correo: row.cliente_correo,
@@ -58,6 +80,7 @@ function mapConversation(row) {
     unread_admin: Number(row.unread_admin || 0),
     unread_cliente: Number(row.unread_cliente || 0),
     total_mensajes: Number(row.total_mensajes || 0),
+    last_message_id: Number(row.last_message_id || 0),
     cerrado_at: row.cerrado_at,
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -69,7 +92,8 @@ async function getConversationById(id) {
     `
       SELECT
         cc.*,
-        COUNT(cm.id) AS total_mensajes
+        COUNT(cm.id) AS total_mensajes,
+        COALESCE(MAX(cm.id), 0) AS last_message_id
       FROM chat_conversaciones cc
       LEFT JOIN chat_mensajes cm ON cm.conversacion_id = cc.id
       WHERE cc.id = ?
@@ -87,7 +111,8 @@ async function getConversationByToken(token) {
     `
       SELECT
         cc.*,
-        COUNT(cm.id) AS total_mensajes
+        COUNT(cm.id) AS total_mensajes,
+        COALESCE(MAX(cm.id), 0) AS last_message_id
       FROM chat_conversaciones cc
       LEFT JOIN chat_mensajes cm ON cm.conversacion_id = cc.id
       WHERE cc.public_token = ?
@@ -100,7 +125,15 @@ async function getConversationByToken(token) {
   return rows[0] || null;
 }
 
-async function getMessages(conversationId) {
+async function getMessages(conversationId, afterId = 0) {
+  const params = [conversationId];
+  let afterSql = "";
+
+  if (Number(afterId) > 0) {
+    afterSql = "AND id > ?";
+    params.push(Number(afterId));
+  }
+
   const [rows] = await pool.query(
     `
       SELECT
@@ -116,9 +149,10 @@ async function getMessages(conversationId) {
         created_at
       FROM chat_mensajes
       WHERE conversacion_id = ?
-      ORDER BY created_at ASC, id ASC
+        ${afterSql}
+      ORDER BY id ASC
     `,
-    [conversationId]
+    params
   );
 
   return rows;
@@ -191,6 +225,27 @@ async function insertMessage(connection, conversation, messageData) {
   return messageResult.insertId;
 }
 
+async function findCotizacionByFolio(folio) {
+  if (!folio) return null;
+
+  const [rows] = await pool.query(
+    `
+      SELECT
+        id,
+        folio,
+        nombre_cliente,
+        whatsapp,
+        correo
+      FROM cotizaciones
+      WHERE folio = ?
+      LIMIT 1
+    `,
+    [folio]
+  );
+
+  return rows[0] || null;
+}
+
 async function createConversationFromCotizacion(folio, req) {
   const cleanFolio = cleanString(folio, 80);
 
@@ -204,31 +259,9 @@ async function createConversationFromCotizacion(folio, req) {
     [cleanFolio]
   );
 
-  if (existingRows[0]) {
-    return existingRows[0];
-  }
+  if (existingRows[0]) return existingRows[0];
 
-  const [quoteRows] = await pool.query(
-    `
-      SELECT
-        id,
-        folio,
-        nombre_cliente,
-        whatsapp,
-        correo,
-        marca_vehiculo,
-        modelo_vehiculo,
-        anio_vehiculo,
-        motor_vehiculo,
-        estado
-      FROM cotizaciones
-      WHERE folio = ?
-      LIMIT 1
-    `,
-    [cleanFolio]
-  );
-
-  const cotizacion = quoteRows[0];
+  const cotizacion = await findCotizacionByFolio(cleanFolio);
 
   if (!cotizacion) {
     const error = new Error("Cotización no encontrada.");
@@ -237,15 +270,7 @@ async function createConversationFromCotizacion(folio, req) {
   }
 
   const admin = getAdminIdentity(req);
-  const asunto = [
-    "Cotización",
-    cotizacion.folio,
-    cotizacion.marca_vehiculo,
-    cotizacion.modelo_vehiculo,
-    cotizacion.anio_vehiculo,
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  const token = createPublicToken();
 
   const connection = await pool.getConnection();
 
@@ -265,22 +290,23 @@ async function createConversationFromCotizacion(folio, req) {
           estado,
           prioridad,
           canal,
+          tipo_intencion,
           admin_asignado_correo,
           admin_asignado_nombre,
           ultimo_mensaje,
           ultimo_emisor,
           last_message_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'ABIERTO', 'MEDIA', 'COTIZACION', ?, ?, ?, 'SISTEMA', NOW())
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'ABIERTO', 'MEDIA', 'COTIZACION', 'COTIZACION', ?, ?, ?, 'SISTEMA', NOW())
       `,
       [
-        createPublicToken(),
+        token,
         cotizacion.id,
         cotizacion.folio,
         cotizacion.nombre_cliente,
         cotizacion.whatsapp,
         cotizacion.correo,
-        asunto,
+        `Cotización ${cotizacion.folio}`,
         admin.correo,
         admin.nombre,
         "Conversación creada desde cotización.",
@@ -302,33 +328,12 @@ async function createConversationFromCotizacion(folio, req) {
         )
         VALUES (?, 'SISTEMA', 'Sistema Andyfers', NULL, ?, 1, 0)
       `,
-      [
-        conversationId,
-        `Conversación creada para la cotización ${cotizacion.folio}.`,
-      ]
-    );
-
-    await connection.query(
-      `
-        INSERT INTO chat_eventos (
-          conversacion_id,
-          tipo,
-          descripcion,
-          usuario_correo
-        )
-        VALUES (?, 'CREADA_DESDE_COTIZACION', ?, ?)
-      `,
-      [
-        conversationId,
-        `Conversación creada desde la cotización ${cotizacion.folio}.`,
-        admin.correo,
-      ]
+      [conversationId, `Conversación creada para la cotización ${cotizacion.folio}.`]
     );
 
     await connection.commit();
 
-    const created = await getConversationById(conversationId);
-    return created;
+    return await getConversationById(conversationId);
   } catch (error) {
     await connection.rollback();
     throw error;
@@ -345,7 +350,7 @@ router.get("/admin/chat/conversaciones", adminChatAccess, async (req, res, next)
 
     const q = cleanString(req.query.q, 120);
     const estado = cleanString(req.query.estado, 40);
-    const limit = Math.min(Math.max(Number(req.query.limit || 30), 1), 80);
+    const limit = Math.min(Math.max(Number(req.query.limit || 40), 1), 100);
 
     const params = [];
     const where = [];
@@ -356,9 +361,13 @@ router.get("/admin/chat/conversaciones", adminChatAccess, async (req, res, next)
     }
 
     if (q) {
+      const like = `%${q}%`;
+
       where.push(`
         (
           cc.cotizacion_folio LIKE ?
+          OR cc.pedido_folio LIKE ?
+          OR cc.producto_codigo LIKE ?
           OR cc.cliente_nombre LIKE ?
           OR cc.cliente_whatsapp LIKE ?
           OR cc.cliente_correo LIKE ?
@@ -367,8 +376,7 @@ router.get("/admin/chat/conversaciones", adminChatAccess, async (req, res, next)
         )
       `);
 
-      const like = `%${q}%`;
-      params.push(like, like, like, like, like, like);
+      params.push(like, like, like, like, like, like, like, like);
     }
 
     params.push(limit);
@@ -377,7 +385,8 @@ router.get("/admin/chat/conversaciones", adminChatAccess, async (req, res, next)
       `
         SELECT
           cc.*,
-          COUNT(cm.id) AS total_mensajes
+          COUNT(cm.id) AS total_mensajes,
+          COALESCE(MAX(cm.id), 0) AS last_message_id
         FROM chat_conversaciones cc
         LEFT JOIN chat_mensajes cm ON cm.conversacion_id = cc.id
         ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
@@ -428,10 +437,7 @@ router.post(
   adminChatAccess,
   async (req, res, next) => {
     try {
-      const conversation = await createConversationFromCotizacion(
-        req.params.folio,
-        req
-      );
+      const conversation = await createConversationFromCotizacion(req.params.folio, req);
 
       res.json({
         ok: true,
@@ -446,6 +452,7 @@ router.post(
 router.get("/admin/chat/conversaciones/:id", adminChatAccess, async (req, res, next) => {
   try {
     const id = Number(req.params.id || 0);
+    const afterId = Number(req.query.after_id || 0);
 
     const conversation = await getConversationById(id);
 
@@ -468,13 +475,14 @@ router.get("/admin/chat/conversaciones/:id", adminChatAccess, async (req, res, n
     );
 
     const updated = await getConversationById(id);
-    const messages = await getMessages(id);
+    const messages = await getMessages(id, afterId);
 
     res.json({
       ok: true,
       data: {
         conversation: mapConversation(updated),
         messages,
+        after_id: afterId,
       },
     });
   } catch (error) {
@@ -591,19 +599,6 @@ router.patch(
         });
       }
 
-      await pool.query(
-        `
-          INSERT INTO chat_eventos (
-            conversacion_id,
-            tipo,
-            descripcion,
-            usuario_correo
-          )
-          VALUES (?, 'CAMBIO_ESTADO', ?, ?)
-        `,
-        [id, `Estado cambiado a ${estado}.`, admin.correo]
-      );
-
       const updated = await getConversationById(id);
 
       res.json({
@@ -619,69 +614,62 @@ router.patch(
 /* PUBLICO */
 
 router.post("/chat/public/iniciar", async (req, res, next) => {
-  try {
-    const folio = cleanString(req.body?.folio, 80);
-    const whatsapp = normalizePhone(req.body?.whatsapp);
+  const connection = await pool.getConnection();
 
-    if (!folio || !whatsapp) {
+  try {
+    const nombre = cleanString(req.body?.nombre, 180);
+    const whatsapp = normalizePhone(req.body?.whatsapp);
+    const mensajeInicial = cleanString(req.body?.mensaje, 4000);
+
+    const tipoIntencion = normalizeIntention(req.body?.tipo_intencion);
+    const cotizacionFolio = cleanString(req.body?.cotizacion_folio || req.body?.folio, 80);
+    const pedidoFolio = cleanString(req.body?.pedido_folio, 80);
+    const productoCodigo = cleanString(req.body?.producto_codigo, 120);
+
+    if (!nombre || !whatsapp || !mensajeInicial) {
       return res.status(400).json({
         ok: false,
-        message: "Folio y WhatsApp son obligatorios.",
+        message: "Nombre, WhatsApp y mensaje son obligatorios.",
       });
     }
 
-    const [quoteRows] = await pool.query(
-      `
-        SELECT
-          id,
-          folio,
-          nombre_cliente,
-          whatsapp,
-          correo
-        FROM cotizaciones
-        WHERE folio = ?
-        LIMIT 1
-      `,
-      [folio]
-    );
+    const cotizacion = await findCotizacionByFolio(cotizacionFolio);
 
-    const cotizacion = quoteRows[0];
+    const asuntoParts = [
+      tipoIntencion,
+      cotizacion?.folio || cotizacionFolio,
+      pedidoFolio,
+      productoCodigo,
+    ].filter(Boolean);
 
-    if (!cotizacion) {
-      return res.status(404).json({
-        ok: false,
-        message: "Cotización no encontrada.",
-      });
-    }
+    const asunto = asuntoParts.join(" · ") || "Consulta comercial";
 
-    const quotePhone = normalizePhone(cotizacion.whatsapp);
+    await connection.beginTransaction();
 
-    if (!quotePhone || !quotePhone.endsWith(whatsapp.slice(-10))) {
-      return res.status(404).json({
-        ok: false,
-        message: "Cotización no encontrada.",
-      });
-    }
-
-    const [existingRows] = await pool.query(
+    const [[existing]] = await connection.query(
       `
         SELECT *
         FROM chat_conversaciones
-        WHERE cotizacion_folio = ?
+        WHERE cliente_whatsapp = ?
+          AND estado <> 'CERRADO'
+        ORDER BY updated_at DESC
         LIMIT 1
+        FOR UPDATE
       `,
-      [folio]
+      [whatsapp]
     );
 
-    let conversation = existingRows[0];
+    let conversationId = existing?.id;
 
-    if (!conversation) {
-      const [result] = await pool.query(
+    if (!conversationId) {
+      const [result] = await connection.query(
         `
           INSERT INTO chat_conversaciones (
             public_token,
             cotizacion_id,
             cotizacion_folio,
+            pedido_folio,
+            producto_codigo,
             cliente_nombre,
             cliente_whatsapp,
             cliente_correo,
@@ -689,42 +677,103 @@ router.post("/chat/public/iniciar", async (req, res, next) => {
             estado,
             prioridad,
             canal,
+            tipo_intencion,
             ultimo_mensaje,
             ultimo_emisor,
-            last_message_at
+            last_message_at,
+            unread_admin,
+            unread_cliente
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, 'ABIERTO', 'MEDIA', 'COTIZACION', ?, 'SISTEMA', NOW())
+          VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, 'ABIERTO', 'MEDIA', 'PUBLICO', ?, ?, 'CLIENTE', NOW(), 1, 0)
         `,
         [
           createPublicToken(),
-          cotizacion.id,
-          cotizacion.folio,
-          cotizacion.nombre_cliente,
-          cotizacion.whatsapp,
-          cotizacion.correo,
-          `Cotización ${cotizacion.folio}`,
-          "Conversación creada por cliente.",
+          cotizacion?.id || null,
+          cotizacion?.folio || cotizacionFolio || null,
+          pedidoFolio || null,
+          productoCodigo || null,
+          nombre,
+          whatsapp,
+          asunto,
+          tipoIntencion,
+          mensajeInicial,
         ]
       );
 
-      conversation = await getConversationById(result.insertId);
+      conversationId = result.insertId;
+    } else {
+      await connection.query(
+        `
+          UPDATE chat_conversaciones
+          SET
+            cliente_nombre = ?,
+            cotizacion_id = COALESCE(cotizacion_id, ?),
+            cotizacion_folio = COALESCE(cotizacion_folio, ?),
+            pedido_folio = COALESCE(pedido_folio, ?),
+            producto_codigo = COALESCE(producto_codigo, ?),
+            asunto = ?,
+            tipo_intencion = ?,
+            ultimo_mensaje = ?,
+            ultimo_emisor = 'CLIENTE',
+            last_message_at = NOW(),
+            unread_admin = unread_admin + 1,
+            updated_at = NOW()
+          WHERE id = ?
+        `,
+        [
+          nombre,
+          cotizacion?.id || null,
+          cotizacion?.folio || cotizacionFolio || null,
+          pedidoFolio || null,
+          productoCodigo || null,
+          asunto,
+          tipoIntencion,
+          mensajeInicial,
+          conversationId,
+        ]
+      );
     }
+
+    await connection.query(
+      `
+        INSERT INTO chat_mensajes (
+          conversacion_id,
+          emisor_tipo,
+          emisor_nombre,
+          emisor_correo,
+          mensaje,
+          leido_admin,
+          leido_cliente
+        )
+        VALUES (?, 'CLIENTE', ?, NULL, ?, 0, 1)
+      `,
+      [conversationId, nombre, mensajeInicial]
+    );
+
+    await connection.commit();
+
+    const updated = await getConversationById(conversationId);
 
     res.json({
       ok: true,
       data: {
-        public_token: conversation.public_token,
-        conversation: mapConversation(conversation),
+        public_token: updated.public_token,
+        conversation: mapConversation(updated),
       },
     });
   } catch (error) {
+    await connection.rollback();
     next(error);
+  } finally {
+    connection.release();
   }
 });
 
 router.get("/chat/public/:token", async (req, res, next) => {
   try {
     const token = cleanString(req.params.token, 96);
+    const afterId = Number(req.query.after_id || 0);
+
     const conversation = await getConversationByToken(token);
 
     if (!conversation) {
@@ -746,13 +795,14 @@ router.get("/chat/public/:token", async (req, res, next) => {
     );
 
     const updated = await getConversationById(conversation.id);
-    const messages = await getMessages(conversation.id);
+    const messages = await getMessages(conversation.id, afterId);
 
     res.json({
       ok: true,
       data: {
         conversation: mapConversation(updated),
         messages,
+        after_id: afterId,
       },
     });
   } catch (error) {
