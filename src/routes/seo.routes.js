@@ -72,6 +72,55 @@ function buildVisibleProductCodeSql(alias = "p") {
   `;
 }
 
+function buildProductSeoVehicleSelectSql(alias = "p") {
+  return `
+    (
+      SELECT pa.anio_inicio
+      FROM producto_aplicaciones pa
+      WHERE pa.producto_id = ${alias}.id
+        AND pa.anio_inicio IS NOT NULL
+      ORDER BY pa.confianza_extraccion DESC, pa.anio_inicio DESC, pa.id ASC
+      LIMIT 1
+    ) AS seo_anio,
+
+    (
+      SELECT pa.marca_auto
+      FROM producto_aplicaciones pa
+      WHERE pa.producto_id = ${alias}.id
+        AND pa.marca_auto IS NOT NULL
+        AND TRIM(pa.marca_auto) <> ''
+      ORDER BY pa.confianza_extraccion DESC, pa.anio_inicio DESC, pa.id ASC
+      LIMIT 1
+    ) AS seo_marca_auto,
+
+    (
+      SELECT pa.modelo_auto
+      FROM producto_aplicaciones pa
+      WHERE pa.producto_id = ${alias}.id
+        AND pa.modelo_auto IS NOT NULL
+        AND TRIM(pa.modelo_auto) <> ''
+      ORDER BY pa.confianza_extraccion DESC, pa.anio_inicio DESC, pa.id ASC
+      LIMIT 1
+    ) AS seo_modelo_auto,
+
+    (
+      SELECT pa.motor
+      FROM producto_aplicaciones pa
+      WHERE pa.producto_id = ${alias}.id
+        AND (
+          pa.motor IS NOT NULL
+          OR pa.cilindraje IS NOT NULL
+          OR pa.motor_detalle IS NOT NULL
+          OR pa.motor_original IS NOT NULL
+        )
+      ORDER BY pa.confianza_extraccion DESC, pa.anio_inicio DESC, pa.id ASC
+      LIMIT 1
+    ) AS seo_motor,
+
+    ${alias}.familia AS seo_linea
+  `;
+}
+
 router.get("/seo/sitemap-productos", async (req, res, next) => {
   try {
     const limit = clampNumber(req.query.limit, 1, 50000, 50000);
@@ -90,6 +139,7 @@ router.get("/seo/sitemap-productos", async (req, res, next) => {
         p.created_at,
         p.nuevo_web,
         p.destacado,
+        ${buildProductSeoVehicleSelectSql("p")},
         (
           SELECT pm.secure_url
           FROM producto_multimedia pm

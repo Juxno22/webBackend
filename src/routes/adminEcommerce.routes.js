@@ -229,6 +229,33 @@ async function getEcommerceSucursal(connection) {
   return sucursal;
 }
 
+async function assertInventarioUniqueKey(connection) {
+  const [rows] = await connection.query(
+    `
+    SELECT
+      INDEX_NAME,
+      GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX) AS columnas
+    FROM information_schema.STATISTICS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'inventario'
+      AND NON_UNIQUE = 0
+    GROUP BY INDEX_NAME
+    HAVING columnas = 'producto_id,sucursal_id'
+    LIMIT 1
+    `
+  );
+
+  if (rows.length === 0) {
+    const error = new Error(
+      "La tabla inventario no tiene índice único producto_id + sucursal_id. " +
+      "El importador ecommerce no puede usar ON DUPLICATE KEY UPDATE de forma segura."
+    );
+
+    error.status = 500;
+    throw error;
+  }
+}
+
 async function findProductByCodes(connection, item) {
   const attempts = [];
 
@@ -371,10 +398,27 @@ async function processImportRows({ connection, rows, sucursal, dryRun }) {
       FROM inventario
       WHERE producto_id = ?
         AND sucursal_id = ?
-      LIMIT 1
+      LIMIT 2
       `,
       [producto.id, sucursal.id]
     );
+
+    if (inventarioRows.length > 1) {
+      result.errores += 1;
+
+      result.detalles.push({
+        row_number: item.row_number,
+        producto_id: producto.id,
+        codigo_andyfers: producto.codigo_andyfers,
+        codigo_importacion: producto.codigo_importacion,
+        estado: "ERROR",
+        mensaje:
+          "Inventario duplicado para este producto en la sucursal ecommerce. " +
+          "Revisa producto_id + sucursal_id antes de importar.",
+      });
+
+      continue;
+    }
 
     const current = inventarioRows?.[0] || null;
 
@@ -596,6 +640,8 @@ router.post(
         });
 
       await connection.beginTransaction();
+
+      await assertInventarioUniqueKey(connection);
 
       const sucursal = await getEcommerceSucursal(connection);
 

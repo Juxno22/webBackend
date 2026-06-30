@@ -131,6 +131,67 @@ function cleanQueryValue(value) {
   return String(value).trim();
 };
 
+function buildProductSeoVehicleSelectSql(alias = "p") {
+  return `
+    (
+      SELECT pa.anio_inicio
+      FROM producto_aplicaciones pa
+      WHERE pa.producto_id = ${alias}.id
+        AND pa.anio_inicio IS NOT NULL
+      ORDER BY
+        pa.confianza_extraccion DESC,
+        pa.anio_inicio DESC,
+        pa.id ASC
+      LIMIT 1
+    ) AS seo_anio,
+
+    (
+      SELECT pa.marca_auto
+      FROM producto_aplicaciones pa
+      WHERE pa.producto_id = ${alias}.id
+        AND pa.marca_auto IS NOT NULL
+        AND TRIM(pa.marca_auto) <> ''
+      ORDER BY
+        pa.confianza_extraccion DESC,
+        pa.anio_inicio DESC,
+        pa.id ASC
+      LIMIT 1
+    ) AS seo_marca_auto,
+
+    (
+      SELECT pa.modelo_auto
+      FROM producto_aplicaciones pa
+      WHERE pa.producto_id = ${alias}.id
+        AND pa.modelo_auto IS NOT NULL
+        AND TRIM(pa.modelo_auto) <> ''
+      ORDER BY
+        pa.confianza_extraccion DESC,
+        pa.anio_inicio DESC,
+        pa.id ASC
+      LIMIT 1
+    ) AS seo_modelo_auto,
+
+    (
+      SELECT pa.motor
+      FROM producto_aplicaciones pa
+      WHERE pa.producto_id = ${alias}.id
+        AND (
+          pa.motor IS NOT NULL
+          OR pa.cilindraje IS NOT NULL
+          OR pa.motor_detalle IS NOT NULL
+          OR pa.motor_original IS NOT NULL
+        )
+      ORDER BY
+        pa.confianza_extraccion DESC,
+        pa.anio_inicio DESC,
+        pa.id ASC
+      LIMIT 1
+    ) AS seo_motor,
+
+    ${alias}.familia AS seo_linea
+  `;
+}
+
 function getCatalogEcommerceSucursalClave() {
   return String(process.env.ECOMMERCE_SUCURSAL_CLAVE || "ECOMMERCE").trim();
 }
@@ -489,6 +550,7 @@ router.get("/productos/destacados", async (req, res, next) => {
         p.nuevo_web,
         p.destacado,
         ${buildEcommerceInventorySelectSql()},
+        ${buildProductSeoVehicleSelectSql("p")},
         COUNT(DISTINCT pc.id) AS total_cruces,
         ${buildProductoMultimediaSelectSql("p")}
       FROM productos p
@@ -799,6 +861,7 @@ router.get("/productos", async (req, res, next) => {
         p.prioridad_ia,
         p.nuevo_web,
         ${buildEcommerceInventorySelectSql()},
+        ${buildProductSeoVehicleSelectSql("p")},
         COUNT(DISTINCT pc.id) AS total_cruces,
         ${buildProductoMultimediaSelectSql("p")}
       FROM productos p
@@ -979,6 +1042,7 @@ router.get("/productos/:codigo", async (req, res, next) => {
         p.activo_web,
         p.activo,
         ${buildEcommerceInventorySelectSql()},
+        ${buildProductSeoVehicleSelectSql("p")},
         ${buildProductoMultimediaSelectSql("p")}
       FROM productos p
       JOIN categorias c ON c.id = p.categoria_id
