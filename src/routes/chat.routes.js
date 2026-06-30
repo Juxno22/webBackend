@@ -32,6 +32,84 @@ function createPublicToken() {
   return crypto.randomBytes(32).toString("hex");
 }
 
+function normalizeProductCode(value) {
+  const clean = cleanString(value, 120);
+
+  if (!clean) return "";
+
+  const invalid = new Set([
+    "#N/A",
+    "N/A",
+    "NA",
+    "ND",
+    "N.D.",
+    "SIN CODIGO",
+    "SIN CÓDIGO",
+    "NULL",
+    "0",
+  ]);
+
+  if (invalid.has(clean.toUpperCase())) return "";
+
+  return clean;
+}
+
+function validateWhatsappOrThrow(whatsapp) {
+  const clean = normalizePhone(whatsapp);
+
+  if (!clean) {
+    const error = new Error("El WhatsApp es obligatorio.");
+    error.status = 400;
+    throw error;
+  }
+
+  if (clean.length < 10 || clean.length > 15) {
+    const error = new Error("El WhatsApp debe tener entre 10 y 15 dígitos.");
+    error.status = 400;
+    throw error;
+  }
+
+  return clean;
+}
+
+function normalizeEstado(value) {
+  const estado = cleanString(value, 40).toUpperCase();
+  const allowed = ["ABIERTO", "ATENDIENDO", "CERRADO"];
+
+  return allowed.includes(estado) ? estado : "";
+}
+
+function getSafeLimit(value, defaultValue = 80, maxValue = 200) {
+  const parsed = Number(value || defaultValue);
+
+  if (!Number.isFinite(parsed)) return defaultValue;
+
+  return Math.min(Math.max(parsed, 1), maxValue);
+}
+
+async function logChatEvent(connection, conversationId, tipo, descripcion, metadata = null) {
+  try {
+    await connection.query(
+      `
+        INSERT INTO chat_eventos (
+          conversacion_id,
+          tipo,
+          descripcion,
+          metadata_json,
+          created_at
+        )
+        VALUES (?, ?, ?, ?, NOW())
+      `,
+      [
+        conversationId,
+        cleanString(tipo, 80),
+        cleanString(descripcion, 500),
+        metadata ? JSON.stringify(metadata) : null,
+      ]
+    );
+  } catch { }
+}
+
 function getAdminIdentity(req) {
   const user = req.admin || req.user || {};
 
@@ -125,14 +203,19 @@ async function getConversationByToken(token) {
   return rows[0] || null;
 }
 
-async function getMessages(conversationId, afterId = 0) {
+async function getMessages(conversationId, afterId = 0, limit = 120) {
+  const safeLimit = getSafeLimit(limit, 120, 250);
+  const safeAfterId = Number(afterId || 0);
+
   const params = [conversationId];
   let afterSql = "";
 
-  if (Number(afterId) > 0) {
+  if (safeAfterId > 0) {
     afterSql = "AND id > ?";
-    params.push(Number(afterId));
+    params.push(safeAfterId);
   }
+
+  params.push(safeLimit);
 
   const [rows] = await pool.query(
     `
@@ -151,6 +234,7 @@ async function getMessages(conversationId, afterId = 0) {
       WHERE conversacion_id = ?
         ${afterSql}
       ORDER BY id ASC
+      LIMIT ?
     `,
     params
   );
@@ -164,6 +248,14 @@ async function insertMessage(connection, conversation, messageData) {
   if (!mensaje) {
     const error = new Error("El mensaje no puede estar vacío.");
     error.status = 400;
+    throw error;
+  }
+
+  if (conversation.estado === "CERRADO" && !messageData.allow_closed) {
+    const error = new Error(
+      "La conversación está cerrada. Para continuar, reábrela o inicia un nuevo chat."
+    );
+    error.status = 409;
     throw error;
   }
 
@@ -201,10 +293,6 @@ async function insertMessage(connection, conversation, messageData) {
     `
       UPDATE chat_conversaciones
       SET
-        estado = CASE
-          WHEN estado = 'CERRADO' THEN 'ABIERTO'
-          ELSE estado
-        END,
         ultimo_mensaje = ?,
         ultimo_emisor = ?,
         last_message_at = NOW(),
@@ -221,6 +309,11 @@ async function insertMessage(connection, conversation, messageData) {
       conversation.id,
     ]
   );
+
+  await logChatEvent(connection, conversation.id, "MENSAJE", "Mensaje agregado al chat.", {
+    emisor_tipo: emisorTipo,
+    message_id: messageResult.insertId,
+  });
 
   return messageResult.insertId;
 }
@@ -331,6 +424,17 @@ async function createConversationFromCotizacion(folio, req) {
       [conversationId, `Conversación creada para la cotización ${cotizacion.folio}.`]
     );
 
+    await logChatEvent(
+      connection,
+      conversationId,
+      "CREACION_DESDE_COTIZACION",
+      `Conversación creada desde cotización ${cotizacion.folio}.`,
+      {
+        folio: cotizacion.folio,
+        admin_correo: admin.correo,
+      }
+    );
+
     await connection.commit();
 
     return await getConversationById(conversationId);
@@ -348,8 +452,8 @@ router.get("/admin/chat/conversaciones", adminChatAccess, async (req, res, next)
     res.setHeader("Cache-Control", "no-store");
 
     const q = cleanString(req.query.q, 120);
-    const estado = cleanString(req.query.estado, 40);
-    const limit = Math.min(Math.max(Number(req.query.limit || 40), 1), 100);
+    const estado = normalizeEstado(req.query.estado);
+    const limit = getSafeLimit(req.query.limit, 40, 100);
 
     const params = [];
     const where = [];
@@ -452,6 +556,7 @@ router.get("/admin/chat/conversaciones/:id", adminChatAccess, async (req, res, n
   try {
     const id = Number(req.params.id || 0);
     const afterId = Number(req.query.after_id || 0);
+    const limit = getSafeLimit(req.query.limit, 120, 250);
 
     const conversation = await getConversationById(id);
 
@@ -474,7 +579,7 @@ router.get("/admin/chat/conversaciones/:id", adminChatAccess, async (req, res, n
     );
 
     const updated = await getConversationById(id);
-    const messages = await getMessages(id, afterId);
+    const messages = await getMessages(id, afterId, limit);
 
     res.json({
       ok: true,
@@ -482,6 +587,8 @@ router.get("/admin/chat/conversaciones/:id", adminChatAccess, async (req, res, n
         conversation: mapConversation(updated),
         messages,
         after_id: afterId,
+        last_message_id: Number(updated.last_message_id || 0),
+        server_time: new Date().toISOString(),
       },
     });
   } catch (error) {
@@ -536,7 +643,8 @@ router.post(
               ELSE estado
             END,
             admin_asignado_nombre = COALESCE(admin_asignado_nombre, ?),
-            admin_asignado_correo = COALESCE(admin_asignado_correo, ?)
+            admin_asignado_correo = COALESCE(admin_asignado_correo, ?),
+            updated_at = NOW()
           WHERE id = ?
         `,
         [admin.nombre, admin.correo, id]
@@ -548,6 +656,7 @@ router.post(
         ok: true,
         data: {
           message_id: messageId,
+          server_time: new Date().toISOString(),
         },
       });
     } catch (error) {
@@ -565,10 +674,9 @@ router.patch(
   async (req, res, next) => {
     try {
       const id = Number(req.params.id || 0);
-      const estado = cleanString(req.body?.estado, 40);
-      const allowed = ["ABIERTO", "ATENDIENDO", "CERRADO"];
+      const estado = normalizeEstado(req.body?.estado);
 
-      if (!allowed.includes(estado)) {
+      if (!estado) {
         return res.status(400).json({
           ok: false,
           message: "Estado de chat inválido.",
@@ -598,6 +706,21 @@ router.patch(
         });
       }
 
+      const connectionLike = {
+        query: (...args) => pool.query(...args),
+      };
+
+      await logChatEvent(
+        connectionLike,
+        id,
+        "CAMBIO_ESTADO",
+        `Estado actualizado a ${estado}.`,
+        {
+          estado,
+          admin_correo: admin.correo,
+        }
+      );
+
       const updated = await getConversationById(id);
 
       res.json({
@@ -617,13 +740,13 @@ router.post("/chat/public/iniciar", async (req, res, next) => {
 
   try {
     const nombre = cleanString(req.body?.nombre, 180);
-    const whatsapp = normalizePhone(req.body?.whatsapp);
+    const whatsapp = validateWhatsappOrThrow(req.body?.whatsapp);
     const mensajeInicial = cleanString(req.body?.mensaje, 4000);
 
     const tipoIntencion = normalizeIntention(req.body?.tipo_intencion);
     const cotizacionFolio = cleanString(req.body?.cotizacion_folio || req.body?.folio, 80);
     const pedidoFolio = cleanString(req.body?.pedido_folio, 80);
-    const productoCodigo = cleanString(req.body?.producto_codigo || req.body?.codigo_producto || req.body?.codigo, 120);
+    const productoCodigo = normalizeProductCode(req.body?.producto_codigo || req.body?.codigo_producto || req.body?.codigo);
 
     if (!nombre || !whatsapp || !mensajeInicial) {
       return res.status(400).json({
@@ -749,6 +872,21 @@ router.post("/chat/public/iniciar", async (req, res, next) => {
       [conversationId, nombre, mensajeInicial]
     );
 
+    await logChatEvent(
+      connection,
+      conversationId,
+      existing ? "REUTILIZACION_PUBLICA" : "CREACION_PUBLICA",
+      existing
+        ? "Cliente reutilizó una conversación abierta."
+        : "Cliente inició una conversación pública.",
+      {
+        nombre,
+        whatsapp,
+        producto_codigo: productoCodigo || null,
+        tipo_intencion: tipoIntencion,
+      }
+    );
+
     await connection.commit();
 
     const updated = await getConversationById(conversationId);
@@ -772,6 +910,7 @@ router.get("/chat/public/:token", async (req, res, next) => {
   try {
     const token = cleanString(req.params.token, 96);
     const afterId = Number(req.query.after_id || 0);
+    const limit = getSafeLimit(req.query.limit, 120, 250);
 
     const conversation = await getConversationByToken(token);
 
@@ -794,7 +933,7 @@ router.get("/chat/public/:token", async (req, res, next) => {
     );
 
     const updated = await getConversationById(conversation.id);
-    const messages = await getMessages(conversation.id, afterId);
+    const messages = await getMessages(conversation.id, afterId, limit);
 
     res.json({
       ok: true,
@@ -802,6 +941,8 @@ router.get("/chat/public/:token", async (req, res, next) => {
         conversation: mapConversation(updated),
         messages,
         after_id: afterId,
+        last_message_id: Number(updated.last_message_id || 0),
+        server_time: new Date().toISOString(),
       },
     });
   } catch (error) {
@@ -836,6 +977,16 @@ router.post("/chat/public/:token/mensajes", async (req, res, next) => {
       });
     }
 
+    if (conversation.estado === "CERRADO") {
+      await connection.rollback();
+
+      return res.status(409).json({
+        ok: false,
+        message:
+          "Esta conversación está cerrada. Inicia un nuevo chat para continuar.",
+      });
+    }
+
     const messageId = await insertMessage(connection, conversation, {
       emisor_tipo: "CLIENTE",
       emisor_nombre: conversation.cliente_nombre || "Cliente",
@@ -849,6 +1000,7 @@ router.post("/chat/public/:token/mensajes", async (req, res, next) => {
       ok: true,
       data: {
         message_id: messageId,
+        server_time: new Date().toISOString(),
       },
     });
   } catch (error) {
