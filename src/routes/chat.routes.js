@@ -37,6 +37,34 @@ function normalizePriority(value) {
   return PRIORIDADES.includes(clean) ? clean : "MEDIA";
 }
 
+function normalizePriorityFilter(value) {
+  const clean = cleanString(value, 20).toUpperCase();
+
+  return PRIORIDADES.includes(clean) ? clean : "";
+}
+
+function normalizeBooleanFilter(value) {
+  const clean = cleanString(value, 20).toLowerCase();
+
+  return ["1", "true", "si", "sí", "yes", "y"].includes(clean);
+}
+
+function normalizeDateFilter(value) {
+  const clean = cleanString(value, 10);
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(clean)) return "";
+
+  return clean;
+}
+
+function normalizeInbox(value) {
+  const clean = cleanString(value, 20).toUpperCase();
+
+  if (["ACTUAL", "HISTORIAL", "TODOS"].includes(clean)) return clean;
+
+  return "ACTUAL";
+}
+
 function normalizeCloseReason(value) {
   const clean = cleanString(value, 80).toUpperCase();
 
@@ -479,8 +507,25 @@ router.get("/admin/chat/conversaciones", adminChatAccess, async (req, res, next)
     res.setHeader("Cache-Control", "no-store");
 
     const q = cleanString(req.query.q, 120);
-    const estado = normalizeEstado(req.query.estado);
-    const limit = getSafeLimit(req.query.limit, 40, 100);
+    const estado = normalizeEstado
+      ? normalizeEstado(req.query.estado)
+      : cleanString(req.query.estado, 40).toUpperCase();
+
+    const bandeja = normalizeInbox(req.query.bandeja);
+    const prioridad = normalizePriorityFilter(req.query.prioridad);
+    const cierreMotivo = normalizeCloseReason(req.query.cierre_motivo);
+    const noLeidos = normalizeBooleanFilter(
+      req.query.no_leidos || req.query.unread
+    );
+
+    const desde = normalizeDateFilter(req.query.desde);
+    const hasta = normalizeDateFilter(req.query.hasta);
+
+    const limit = getSafeLimit
+      ? getSafeLimit(req.query.limit, 40, 100)
+      : Math.min(Math.max(Number(req.query.limit || 40), 1), 100);
+
+    const offset = Math.max(Number(req.query.offset || 0), 0);
 
     const params = [];
     const where = [];
@@ -488,6 +533,38 @@ router.get("/admin/chat/conversaciones", adminChatAccess, async (req, res, next)
     if (estado) {
       where.push("cc.estado = ?");
       params.push(estado);
+    } else if (bandeja === "ACTUAL") {
+      where.push("cc.estado <> 'CERRADO'");
+    } else if (bandeja === "HISTORIAL") {
+      where.push("cc.estado = 'CERRADO'");
+    }
+
+    if (prioridad) {
+      where.push("cc.prioridad = ?");
+      params.push(prioridad);
+    }
+
+    if (cierreMotivo) {
+      where.push("cc.cierre_motivo = ?");
+      params.push(cierreMotivo);
+    }
+
+    if (noLeidos) {
+      where.push("cc.unread_admin > 0");
+    }
+
+    if (desde) {
+      where.push(
+        "COALESCE(cc.last_message_at, cc.updated_at, cc.created_at) >= ?"
+      );
+      params.push(`${desde} 00:00:00`);
+    }
+
+    if (hasta) {
+      where.push(
+        "COALESCE(cc.last_message_at, cc.updated_at, cc.created_at) < DATE_ADD(?, INTERVAL 1 DAY)"
+      );
+      params.push(`${hasta} 00:00:00`);
     }
 
     if (q) {
@@ -509,7 +586,7 @@ router.get("/admin/chat/conversaciones", adminChatAccess, async (req, res, next)
       params.push(like, like, like, like, like, like, like, like);
     }
 
-    params.push(limit);
+    params.push(limit, offset);
 
     const [rows] = await pool.query(
       `
@@ -522,6 +599,14 @@ router.get("/admin/chat/conversaciones", adminChatAccess, async (req, res, next)
         ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
         GROUP BY cc.id
         ORDER BY
+          CASE WHEN cc.unread_admin > 0 THEN 0 ELSE 1 END ASC,
+          CASE cc.prioridad
+            WHEN 'URGENTE' THEN 1
+            WHEN 'ALTA' THEN 2
+            WHEN 'MEDIA' THEN 3
+            WHEN 'BAJA' THEN 4
+            ELSE 5
+          END ASC,
           CASE cc.estado
             WHEN 'ABIERTO' THEN 1
             WHEN 'ATENDIENDO' THEN 2
@@ -530,6 +615,7 @@ router.get("/admin/chat/conversaciones", adminChatAccess, async (req, res, next)
           END ASC,
           COALESCE(cc.last_message_at, cc.updated_at, cc.created_at) DESC
         LIMIT ?
+        OFFSET ?
       `,
       params
     );
@@ -538,9 +624,12 @@ router.get("/admin/chat/conversaciones", adminChatAccess, async (req, res, next)
       `
         SELECT
           COUNT(*) AS total,
+          SUM(CASE WHEN estado <> 'CERRADO' THEN 1 ELSE 0 END) AS actuales,
           SUM(CASE WHEN estado = 'ABIERTO' THEN 1 ELSE 0 END) AS abiertos,
           SUM(CASE WHEN estado = 'ATENDIENDO' THEN 1 ELSE 0 END) AS atendiendo,
           SUM(CASE WHEN estado = 'CERRADO' THEN 1 ELSE 0 END) AS cerrados,
+          SUM(CASE WHEN prioridad = 'URGENTE' THEN 1 ELSE 0 END) AS urgentes,
+          SUM(CASE WHEN prioridad = 'ALTA' THEN 1 ELSE 0 END) AS altas,
           SUM(unread_admin) AS no_leidos_admin
         FROM chat_conversaciones
       `
@@ -551,10 +640,25 @@ router.get("/admin/chat/conversaciones", adminChatAccess, async (req, res, next)
       data: rows.map(mapConversation),
       summary: {
         total: Number(summaryRows[0]?.total || 0),
+        actuales: Number(summaryRows[0]?.actuales || 0),
         abiertos: Number(summaryRows[0]?.abiertos || 0),
         atendiendo: Number(summaryRows[0]?.atendiendo || 0),
         cerrados: Number(summaryRows[0]?.cerrados || 0),
+        urgentes: Number(summaryRows[0]?.urgentes || 0),
+        altas: Number(summaryRows[0]?.altas || 0),
         no_leidos_admin: Number(summaryRows[0]?.no_leidos_admin || 0),
+      },
+      filters: {
+        bandeja,
+        estado,
+        prioridad,
+        cierre_motivo: cierreMotivo,
+        no_leidos: noLeidos,
+        desde,
+        hasta,
+        q,
+        limit,
+        offset,
       },
     });
   } catch (error) {
