@@ -1,0 +1,813 @@
+import crypto from "crypto";
+import { Router } from "express";
+import { pool } from "../config/db.js";
+import { requireAdminAuth, requireRole } from "../middleware/authAdmin.js";
+
+const router = Router();
+
+const adminChatAccess = [requireAdminAuth, requireRole(["ADMIN", "VENTAS", "SOPORTE"])];
+
+function cleanString(value, maxLength = 500) {
+  return String(value || "").trim().slice(0, maxLength);
+}
+
+function normalizePhone(value) {
+  return String(value || "").replace(/\D/g, "");
+}
+
+function createPublicToken() {
+  return crypto.randomBytes(32).toString("hex");
+}
+
+function getAdminIdentity(req) {
+  const user = req.admin || req.user || {};
+
+  return {
+    nombre:
+      user.nombre ||
+      user.name ||
+      user.correo ||
+      user.email ||
+      "Administrador",
+    correo: user.correo || user.email || null,
+  };
+}
+
+function mapConversation(row) {
+  if (!row) return null;
+
+  return {
+    id: row.id,
+    public_token: row.public_token,
+    cotizacion_id: row.cotizacion_id,
+    cotizacion_folio: row.cotizacion_folio,
+    cliente_nombre: row.cliente_nombre,
+    cliente_whatsapp: row.cliente_whatsapp,
+    cliente_correo: row.cliente_correo,
+    asunto: row.asunto,
+    estado: row.estado,
+    prioridad: row.prioridad,
+    canal: row.canal,
+    admin_asignado_correo: row.admin_asignado_correo,
+    admin_asignado_nombre: row.admin_asignado_nombre,
+    ultimo_mensaje: row.ultimo_mensaje,
+    ultimo_emisor: row.ultimo_emisor,
+    last_message_at: row.last_message_at,
+    last_admin_read_at: row.last_admin_read_at,
+    last_cliente_read_at: row.last_cliente_read_at,
+    unread_admin: Number(row.unread_admin || 0),
+    unread_cliente: Number(row.unread_cliente || 0),
+    total_mensajes: Number(row.total_mensajes || 0),
+    cerrado_at: row.cerrado_at,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+async function getConversationById(id) {
+  const [rows] = await pool.query(
+    `
+      SELECT
+        cc.*,
+        COUNT(cm.id) AS total_mensajes
+      FROM chat_conversaciones cc
+      LEFT JOIN chat_mensajes cm ON cm.conversacion_id = cc.id
+      WHERE cc.id = ?
+      GROUP BY cc.id
+      LIMIT 1
+    `,
+    [id]
+  );
+
+  return rows[0] || null;
+}
+
+async function getConversationByToken(token) {
+  const [rows] = await pool.query(
+    `
+      SELECT
+        cc.*,
+        COUNT(cm.id) AS total_mensajes
+      FROM chat_conversaciones cc
+      LEFT JOIN chat_mensajes cm ON cm.conversacion_id = cc.id
+      WHERE cc.public_token = ?
+      GROUP BY cc.id
+      LIMIT 1
+    `,
+    [token]
+  );
+
+  return rows[0] || null;
+}
+
+async function getMessages(conversationId) {
+  const [rows] = await pool.query(
+    `
+      SELECT
+        id,
+        conversacion_id,
+        emisor_tipo,
+        emisor_nombre,
+        emisor_correo,
+        mensaje,
+        metadata_json,
+        leido_admin,
+        leido_cliente,
+        created_at
+      FROM chat_mensajes
+      WHERE conversacion_id = ?
+      ORDER BY created_at ASC, id ASC
+    `,
+    [conversationId]
+  );
+
+  return rows;
+}
+
+async function insertMessage(connection, conversation, messageData) {
+  const mensaje = cleanString(messageData.mensaje, 4000);
+
+  if (!mensaje) {
+    const error = new Error("El mensaje no puede estar vacío.");
+    error.status = 400;
+    throw error;
+  }
+
+  const emisorTipo = messageData.emisor_tipo;
+  const isAdmin = emisorTipo === "ADMIN";
+  const isCliente = emisorTipo === "CLIENTE";
+
+  const [messageResult] = await connection.query(
+    `
+      INSERT INTO chat_mensajes (
+        conversacion_id,
+        emisor_tipo,
+        emisor_nombre,
+        emisor_correo,
+        mensaje,
+        metadata_json,
+        leido_admin,
+        leido_cliente
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `,
+    [
+      conversation.id,
+      emisorTipo,
+      messageData.emisor_nombre || null,
+      messageData.emisor_correo || null,
+      mensaje,
+      messageData.metadata_json || null,
+      isAdmin ? 1 : 0,
+      isCliente ? 1 : 0,
+    ]
+  );
+
+  await connection.query(
+    `
+      UPDATE chat_conversaciones
+      SET
+        estado = CASE
+          WHEN estado = 'CERRADO' THEN 'ABIERTO'
+          ELSE estado
+        END,
+        ultimo_mensaje = ?,
+        ultimo_emisor = ?,
+        last_message_at = NOW(),
+        unread_admin = unread_admin + ?,
+        unread_cliente = unread_cliente + ?,
+        updated_at = NOW()
+      WHERE id = ?
+    `,
+    [
+      mensaje,
+      emisorTipo,
+      isCliente ? 1 : 0,
+      isAdmin ? 1 : 0,
+      conversation.id,
+    ]
+  );
+
+  return messageResult.insertId;
+}
+
+async function createConversationFromCotizacion(folio, req) {
+  const cleanFolio = cleanString(folio, 80);
+
+  const [existingRows] = await pool.query(
+    `
+      SELECT *
+      FROM chat_conversaciones
+      WHERE cotizacion_folio = ?
+      LIMIT 1
+    `,
+    [cleanFolio]
+  );
+
+  if (existingRows[0]) {
+    return existingRows[0];
+  }
+
+  const [quoteRows] = await pool.query(
+    `
+      SELECT
+        id,
+        folio,
+        nombre_cliente,
+        whatsapp,
+        correo,
+        marca_vehiculo,
+        modelo_vehiculo,
+        anio_vehiculo,
+        motor_vehiculo,
+        estado
+      FROM cotizaciones
+      WHERE folio = ?
+      LIMIT 1
+    `,
+    [cleanFolio]
+  );
+
+  const cotizacion = quoteRows[0];
+
+  if (!cotizacion) {
+    const error = new Error("Cotización no encontrada.");
+    error.status = 404;
+    throw error;
+  }
+
+  const admin = getAdminIdentity(req);
+  const asunto = [
+    "Cotización",
+    cotizacion.folio,
+    cotizacion.marca_vehiculo,
+    cotizacion.modelo_vehiculo,
+    cotizacion.anio_vehiculo,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  const connection = await pool.getConnection();
+
+  try {
+    await connection.beginTransaction();
+
+    const [result] = await connection.query(
+      `
+        INSERT INTO chat_conversaciones (
+          public_token,
+          cotizacion_id,
+          cotizacion_folio,
+          cliente_nombre,
+          cliente_whatsapp,
+          cliente_correo,
+          asunto,
+          estado,
+          prioridad,
+          canal,
+          admin_asignado_correo,
+          admin_asignado_nombre,
+          ultimo_mensaje,
+          ultimo_emisor,
+          last_message_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'ABIERTO', 'MEDIA', 'COTIZACION', ?, ?, ?, 'SISTEMA', NOW())
+      `,
+      [
+        createPublicToken(),
+        cotizacion.id,
+        cotizacion.folio,
+        cotizacion.nombre_cliente,
+        cotizacion.whatsapp,
+        cotizacion.correo,
+        asunto,
+        admin.correo,
+        admin.nombre,
+        "Conversación creada desde cotización.",
+      ]
+    );
+
+    const conversationId = result.insertId;
+
+    await connection.query(
+      `
+        INSERT INTO chat_mensajes (
+          conversacion_id,
+          emisor_tipo,
+          emisor_nombre,
+          emisor_correo,
+          mensaje,
+          leido_admin,
+          leido_cliente
+        )
+        VALUES (?, 'SISTEMA', 'Sistema Andyfers', NULL, ?, 1, 0)
+      `,
+      [
+        conversationId,
+        `Conversación creada para la cotización ${cotizacion.folio}.`,
+      ]
+    );
+
+    await connection.query(
+      `
+        INSERT INTO chat_eventos (
+          conversacion_id,
+          tipo,
+          descripcion,
+          usuario_correo
+        )
+        VALUES (?, 'CREADA_DESDE_COTIZACION', ?, ?)
+      `,
+      [
+        conversationId,
+        `Conversación creada desde la cotización ${cotizacion.folio}.`,
+        admin.correo,
+      ]
+    );
+
+    await connection.commit();
+
+    const created = await getConversationById(conversationId);
+    return created;
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
+
+/* ADMIN */
+
+router.get("/admin/chat/conversaciones", adminChatAccess, async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+
+    const q = cleanString(req.query.q, 120);
+    const estado = cleanString(req.query.estado, 40);
+    const limit = Math.min(Math.max(Number(req.query.limit || 30), 1), 80);
+
+    const params = [];
+    const where = [];
+
+    if (estado) {
+      where.push("cc.estado = ?");
+      params.push(estado);
+    }
+
+    if (q) {
+      where.push(`
+        (
+          cc.cotizacion_folio LIKE ?
+          OR cc.cliente_nombre LIKE ?
+          OR cc.cliente_whatsapp LIKE ?
+          OR cc.cliente_correo LIKE ?
+          OR cc.asunto LIKE ?
+          OR cc.ultimo_mensaje LIKE ?
+        )
+      `);
+
+      const like = `%${q}%`;
+      params.push(like, like, like, like, like, like);
+    }
+
+    params.push(limit);
+
+    const [rows] = await pool.query(
+      `
+        SELECT
+          cc.*,
+          COUNT(cm.id) AS total_mensajes
+        FROM chat_conversaciones cc
+        LEFT JOIN chat_mensajes cm ON cm.conversacion_id = cc.id
+        ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+        GROUP BY cc.id
+        ORDER BY
+          CASE cc.estado
+            WHEN 'ABIERTO' THEN 1
+            WHEN 'ATENDIENDO' THEN 2
+            WHEN 'CERRADO' THEN 3
+            ELSE 4
+          END ASC,
+          COALESCE(cc.last_message_at, cc.updated_at, cc.created_at) DESC
+        LIMIT ?
+      `,
+      params
+    );
+
+    const [summaryRows] = await pool.query(
+      `
+        SELECT
+          COUNT(*) AS total,
+          SUM(CASE WHEN estado = 'ABIERTO' THEN 1 ELSE 0 END) AS abiertos,
+          SUM(CASE WHEN estado = 'ATENDIENDO' THEN 1 ELSE 0 END) AS atendiendo,
+          SUM(CASE WHEN estado = 'CERRADO' THEN 1 ELSE 0 END) AS cerrados,
+          SUM(unread_admin) AS no_leidos_admin
+        FROM chat_conversaciones
+      `
+    );
+
+    res.json({
+      ok: true,
+      data: rows.map(mapConversation),
+      summary: {
+        total: Number(summaryRows[0]?.total || 0),
+        abiertos: Number(summaryRows[0]?.abiertos || 0),
+        atendiendo: Number(summaryRows[0]?.atendiendo || 0),
+        cerrados: Number(summaryRows[0]?.cerrados || 0),
+        no_leidos_admin: Number(summaryRows[0]?.no_leidos_admin || 0),
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post(
+  "/admin/chat/conversaciones/from-cotizacion/:folio",
+  adminChatAccess,
+  async (req, res, next) => {
+    try {
+      const conversation = await createConversationFromCotizacion(
+        req.params.folio,
+        req
+      );
+
+      res.json({
+        ok: true,
+        data: mapConversation(conversation),
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.get("/admin/chat/conversaciones/:id", adminChatAccess, async (req, res, next) => {
+  try {
+    const id = Number(req.params.id || 0);
+
+    const conversation = await getConversationById(id);
+
+    if (!conversation) {
+      return res.status(404).json({
+        ok: false,
+        message: "Conversación no encontrada.",
+      });
+    }
+
+    await pool.query(
+      `
+        UPDATE chat_conversaciones
+        SET
+          unread_admin = 0,
+          last_admin_read_at = NOW()
+        WHERE id = ?
+      `,
+      [id]
+    );
+
+    const updated = await getConversationById(id);
+    const messages = await getMessages(id);
+
+    res.json({
+      ok: true,
+      data: {
+        conversation: mapConversation(updated),
+        messages,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post(
+  "/admin/chat/conversaciones/:id/mensajes",
+  adminChatAccess,
+  async (req, res, next) => {
+    const connection = await pool.getConnection();
+
+    try {
+      const id = Number(req.params.id || 0);
+      const admin = getAdminIdentity(req);
+
+      await connection.beginTransaction();
+
+      const [[conversation]] = await connection.query(
+        `
+          SELECT *
+          FROM chat_conversaciones
+          WHERE id = ?
+          FOR UPDATE
+        `,
+        [id]
+      );
+
+      if (!conversation) {
+        await connection.rollback();
+
+        return res.status(404).json({
+          ok: false,
+          message: "Conversación no encontrada.",
+        });
+      }
+
+      const messageId = await insertMessage(connection, conversation, {
+        emisor_tipo: "ADMIN",
+        emisor_nombre: admin.nombre,
+        emisor_correo: admin.correo,
+        mensaje: req.body?.mensaje,
+      });
+
+      await connection.query(
+        `
+          UPDATE chat_conversaciones
+          SET
+            estado = CASE
+              WHEN estado = 'ABIERTO' THEN 'ATENDIENDO'
+              ELSE estado
+            END,
+            admin_asignado_nombre = COALESCE(admin_asignado_nombre, ?),
+            admin_asignado_correo = COALESCE(admin_asignado_correo, ?)
+          WHERE id = ?
+        `,
+        [admin.nombre, admin.correo, id]
+      );
+
+      await connection.commit();
+
+      res.json({
+        ok: true,
+        data: {
+          message_id: messageId,
+        },
+      });
+    } catch (error) {
+      await connection.rollback();
+      next(error);
+    } finally {
+      connection.release();
+    }
+  }
+);
+
+router.patch(
+  "/admin/chat/conversaciones/:id/estado",
+  adminChatAccess,
+  async (req, res, next) => {
+    try {
+      const id = Number(req.params.id || 0);
+      const estado = cleanString(req.body?.estado, 40);
+      const allowed = ["ABIERTO", "ATENDIENDO", "CERRADO"];
+
+      if (!allowed.includes(estado)) {
+        return res.status(400).json({
+          ok: false,
+          message: "Estado de chat inválido.",
+        });
+      }
+
+      const admin = getAdminIdentity(req);
+
+      const [result] = await pool.query(
+        `
+          UPDATE chat_conversaciones
+          SET
+            estado = ?,
+            cerrado_at = CASE WHEN ? = 'CERRADO' THEN NOW() ELSE NULL END,
+            admin_asignado_correo = COALESCE(admin_asignado_correo, ?),
+            admin_asignado_nombre = COALESCE(admin_asignado_nombre, ?),
+            updated_at = NOW()
+          WHERE id = ?
+        `,
+        [estado, estado, admin.correo, admin.nombre, id]
+      );
+
+      if (!result.affectedRows) {
+        return res.status(404).json({
+          ok: false,
+          message: "Conversación no encontrada.",
+        });
+      }
+
+      await pool.query(
+        `
+          INSERT INTO chat_eventos (
+            conversacion_id,
+            tipo,
+            descripcion,
+            usuario_correo
+          )
+          VALUES (?, 'CAMBIO_ESTADO', ?, ?)
+        `,
+        [id, `Estado cambiado a ${estado}.`, admin.correo]
+      );
+
+      const updated = await getConversationById(id);
+
+      res.json({
+        ok: true,
+        data: mapConversation(updated),
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/* PUBLICO */
+
+router.post("/chat/public/iniciar", async (req, res, next) => {
+  try {
+    const folio = cleanString(req.body?.folio, 80);
+    const whatsapp = normalizePhone(req.body?.whatsapp);
+
+    if (!folio || !whatsapp) {
+      return res.status(400).json({
+        ok: false,
+        message: "Folio y WhatsApp son obligatorios.",
+      });
+    }
+
+    const [quoteRows] = await pool.query(
+      `
+        SELECT
+          id,
+          folio,
+          nombre_cliente,
+          whatsapp,
+          correo
+        FROM cotizaciones
+        WHERE folio = ?
+        LIMIT 1
+      `,
+      [folio]
+    );
+
+    const cotizacion = quoteRows[0];
+
+    if (!cotizacion) {
+      return res.status(404).json({
+        ok: false,
+        message: "Cotización no encontrada.",
+      });
+    }
+
+    const quotePhone = normalizePhone(cotizacion.whatsapp);
+
+    if (!quotePhone || !quotePhone.endsWith(whatsapp.slice(-10))) {
+      return res.status(404).json({
+        ok: false,
+        message: "Cotización no encontrada.",
+      });
+    }
+
+    const [existingRows] = await pool.query(
+      `
+        SELECT *
+        FROM chat_conversaciones
+        WHERE cotizacion_folio = ?
+        LIMIT 1
+      `,
+      [folio]
+    );
+
+    let conversation = existingRows[0];
+
+    if (!conversation) {
+      const [result] = await pool.query(
+        `
+          INSERT INTO chat_conversaciones (
+            public_token,
+            cotizacion_id,
+            cotizacion_folio,
+            cliente_nombre,
+            cliente_whatsapp,
+            cliente_correo,
+            asunto,
+            estado,
+            prioridad,
+            canal,
+            ultimo_mensaje,
+            ultimo_emisor,
+            last_message_at
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, 'ABIERTO', 'MEDIA', 'COTIZACION', ?, 'SISTEMA', NOW())
+        `,
+        [
+          createPublicToken(),
+          cotizacion.id,
+          cotizacion.folio,
+          cotizacion.nombre_cliente,
+          cotizacion.whatsapp,
+          cotizacion.correo,
+          `Cotización ${cotizacion.folio}`,
+          "Conversación creada por cliente.",
+        ]
+      );
+
+      conversation = await getConversationById(result.insertId);
+    }
+
+    res.json({
+      ok: true,
+      data: {
+        public_token: conversation.public_token,
+        conversation: mapConversation(conversation),
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/chat/public/:token", async (req, res, next) => {
+  try {
+    const token = cleanString(req.params.token, 96);
+    const conversation = await getConversationByToken(token);
+
+    if (!conversation) {
+      return res.status(404).json({
+        ok: false,
+        message: "Chat no encontrado.",
+      });
+    }
+
+    await pool.query(
+      `
+        UPDATE chat_conversaciones
+        SET
+          unread_cliente = 0,
+          last_cliente_read_at = NOW()
+        WHERE id = ?
+      `,
+      [conversation.id]
+    );
+
+    const updated = await getConversationById(conversation.id);
+    const messages = await getMessages(conversation.id);
+
+    res.json({
+      ok: true,
+      data: {
+        conversation: mapConversation(updated),
+        messages,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/chat/public/:token/mensajes", async (req, res, next) => {
+  const connection = await pool.getConnection();
+
+  try {
+    const token = cleanString(req.params.token, 96);
+
+    await connection.beginTransaction();
+
+    const [[conversation]] = await connection.query(
+      `
+        SELECT *
+        FROM chat_conversaciones
+        WHERE public_token = ?
+        FOR UPDATE
+      `,
+      [token]
+    );
+
+    if (!conversation) {
+      await connection.rollback();
+
+      return res.status(404).json({
+        ok: false,
+        message: "Chat no encontrado.",
+      });
+    }
+
+    const messageId = await insertMessage(connection, conversation, {
+      emisor_tipo: "CLIENTE",
+      emisor_nombre: conversation.cliente_nombre || "Cliente",
+      emisor_correo: conversation.cliente_correo || null,
+      mensaje: req.body?.mensaje,
+    });
+
+    await connection.commit();
+
+    res.json({
+      ok: true,
+      data: {
+        message_id: messageId,
+      },
+    });
+  } catch (error) {
+    await connection.rollback();
+    next(error);
+  } finally {
+    connection.release();
+  }
+});
+
+export default router;

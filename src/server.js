@@ -35,6 +35,7 @@ import { buildCorsOptions, getProductionHelmetOptions } from "./config/productio
 import adminEcommerceRoutes from "./routes/adminEcommerce.routes.js";
 import adminSalesRoutes from "./routes/adminSales.routes.js";
 import adminOperationsRoutes from "./routes/adminOperations.routes.js";
+import chatRoutes from "./routes/chat.routes.js";
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -69,6 +70,7 @@ app.use("/api", adminSecurityRoutes);
 app.use("/api", adminEcommerceRoutes);
 app.use("/api", adminSalesRoutes);
 app.use("/api", adminOperationsRoutes);
+app.use("/api", chatRoutes);
 
 app.use("/api", healthRoutes);
 app.use("/api", catalogoRoutes);
