@@ -340,10 +340,9 @@ async function createConversationFromCotizacion(folio, req) {
   } finally {
     connection.release();
   }
-}
+};
 
 /* ADMIN */
-
 router.get("/admin/chat/conversaciones", adminChatAccess, async (req, res, next) => {
   try {
     res.setHeader("Cache-Control", "no-store");
@@ -624,7 +623,7 @@ router.post("/chat/public/iniciar", async (req, res, next) => {
     const tipoIntencion = normalizeIntention(req.body?.tipo_intencion);
     const cotizacionFolio = cleanString(req.body?.cotizacion_folio || req.body?.folio, 80);
     const pedidoFolio = cleanString(req.body?.pedido_folio, 80);
-    const productoCodigo = cleanString(req.body?.producto_codigo, 120);
+    const productoCodigo = cleanString(req.body?.producto_codigo || req.body?.codigo_producto || req.body?.codigo, 120);
 
     if (!nombre || !whatsapp || !mensajeInicial) {
       return res.status(400).json({
@@ -710,7 +709,7 @@ router.post("/chat/public/iniciar", async (req, res, next) => {
             cotizacion_id = COALESCE(cotizacion_id, ?),
             cotizacion_folio = COALESCE(cotizacion_folio, ?),
             pedido_folio = COALESCE(pedido_folio, ?),
-            producto_codigo = COALESCE(producto_codigo, ?),
+            producto_codigo = COALESCE(NULLIF(?, ''), producto_codigo),
             asunto = ?,
             tipo_intencion = ?,
             ultimo_mensaje = ?,
@@ -725,7 +724,7 @@ router.post("/chat/public/iniciar", async (req, res, next) => {
           cotizacion?.id || null,
           cotizacion?.folio || cotizacionFolio || null,
           pedidoFolio || null,
-          productoCodigo || null,
+          productoCodigo || "",
           asunto,
           tipoIntencion,
           mensajeInicial,
