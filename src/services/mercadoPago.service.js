@@ -1,6 +1,6 @@
 const MP_API_BASE_URL = "https://api.mercadopago.com";
 
-const VALID_CHECKOUT_MODES = new Set(["production", "sandbox"]);
+const VALID_CHECKOUT_MODES = new Set(["production", ""]);
 
 function cleanEnv(value) {
   return String(value || "").trim();
@@ -17,7 +17,7 @@ export function getMercadoPagoCheckoutMode() {
     return mode;
   }
 
-  return process.env.NODE_ENV === "production" ? "production" : "sandbox";
+  return process.env.NODE_ENV === "production" ? "production" : "";
 }
 
 export function isMercadoPagoProductionMode() {
