@@ -1,11 +1,27 @@
 const MP_API_BASE_URL = "https://api.mercadopago.com";
 
+const VALID_CHECKOUT_MODES = new Set(["production", "sandbox"]);
+
 function cleanEnv(value) {
   return String(value || "").trim();
 }
 
 function getAccessToken() {
   return cleanEnv(process.env.MP_ACCESS_TOKEN);
+}
+
+export function getMercadoPagoCheckoutMode() {
+  const mode = cleanEnv(process.env.MP_CHECKOUT_MODE).toLowerCase();
+
+  if (VALID_CHECKOUT_MODES.has(mode)) {
+    return mode;
+  }
+
+  return process.env.NODE_ENV === "production" ? "production" : "sandbox";
+}
+
+export function isMercadoPagoProductionMode() {
+  return getMercadoPagoCheckoutMode() === "production";
 }
 
 export function isMercadoPagoConfigured() {
@@ -15,6 +31,34 @@ export function isMercadoPagoConfigured() {
 export function assertMercadoPagoConfigured() {
   if (!isMercadoPagoConfigured()) {
     const error = new Error("Mercado Pago no está configurado.");
+    error.status = 500;
+    throw error;
+  }
+}
+
+function isHttpsUrl(value) {
+  const clean = cleanEnv(value);
+
+  return clean.startsWith("https://");
+}
+
+function assertMercadoPagoProductionReady() {
+  if (!isMercadoPagoProductionMode()) return;
+
+  const urls = getMercadoPagoCheckoutUrls();
+
+  if (!isHttpsUrl(urls.success) || !isHttpsUrl(urls.pending) || !isHttpsUrl(urls.failure)) {
+    const error = new Error(
+      "Mercado Pago está en producción, pero las URLs de retorno no son HTTPS."
+    );
+    error.status = 500;
+    throw error;
+  }
+
+  if (urls.notification && !isHttpsUrl(urls.notification)) {
+    const error = new Error(
+      "Mercado Pago está en producción, pero la URL del webhook no es HTTPS."
+    );
     error.status = 500;
     throw error;
   }
@@ -54,7 +98,7 @@ async function mercadoPagoRequest(path, options = {}) {
     const error = new Error(
       data?.message ||
         data?.error ||
-        `Mercado Pago respondió con HTTP ${response.status}.`,
+        `Mercado Pago respondió con HTTP ${response.status}.`
     );
 
     error.status = response.status;
@@ -90,7 +134,19 @@ export function getEcommerceCurrency() {
   return cleanEnv(process.env.ECOMMERCE_CURRENCY) || "MXN";
 }
 
+export function getMercadoPagoPreferenceCheckoutUrl(preference = {}) {
+  const mode = getMercadoPagoCheckoutMode();
+
+  if (mode === "production") {
+    return cleanEnv(preference.init_point);
+  }
+
+  return cleanEnv(preference.sandbox_init_point) || cleanEnv(preference.init_point);
+}
+
 export async function createMercadoPagoPreference(preferencePayload) {
+  assertMercadoPagoProductionReady();
+
   return mercadoPagoRequest("/checkout/preferences", {
     method: "POST",
     body: JSON.stringify(preferencePayload),
@@ -120,7 +176,7 @@ export async function getMercadoPagoMerchantOrder(merchantOrderId) {
     `/merchant_orders/${encodeURIComponent(merchantOrderId)}`,
     {
       method: "GET",
-    },
+    }
   );
 }
 
@@ -151,7 +207,7 @@ export function buildPreferenceBasePayload({
 
   if (!urls.success || !urls.pending || !urls.failure) {
     const error = new Error(
-      "Faltan URLs de retorno de Mercado Pago en variables de entorno.",
+      "Faltan URLs de retorno de Mercado Pago en variables de entorno."
     );
     error.status = 500;
     throw error;

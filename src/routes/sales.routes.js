@@ -5,7 +5,9 @@ import {
     buildPreferenceBasePayload,
     createMercadoPagoPreference,
     getEcommerceCurrency,
+    getMercadoPagoCheckoutMode,
     getMercadoPagoPayment,
+    getMercadoPagoPreferenceCheckoutUrl,
     mapMercadoPagoStatusToVentaStatus,
 } from "../services/mercadoPago.service.js";
 import {
@@ -697,9 +699,19 @@ router.post("/ventas/checkout", async (req, res, next) => {
         });
 
         let preference;
+        let checkoutUrl;
 
         try {
             preference = await createMercadoPagoPreference(preferencePayload);
+            checkoutUrl = getMercadoPagoPreferenceCheckoutUrl(preference);
+
+            if (!checkoutUrl) {
+                const error = new Error(
+                    "Mercado Pago no regresó una URL de checkout válida para el modo configurado."
+                );
+                error.status = 502;
+                throw error;
+            }
         } catch (preferenceError) {
             await pool.query(
                 `
@@ -792,6 +804,8 @@ router.post("/ventas/checkout", async (req, res, next) => {
                 moneda: getEcommerceCurrency(),
                 mercado_pago: {
                     preference_id: preference.id || null,
+                    checkout_mode: getMercadoPagoCheckoutMode(),
+                    checkout_url: checkoutUrl,
                     init_point: preference.init_point || null,
                     sandbox_init_point: preference.sandbox_init_point || null,
                 },
